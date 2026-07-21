@@ -12,7 +12,8 @@ use crate::refcode::{self, RefTail};
 use crate::scan::{self, is_valid_period};
 use crate::slug::slugify;
 
-const ATTEMPT_BUDGET: usize = 100;
+const CANDIDATE_BUDGET: usize = 100;
+const TAIL_SPACE_SIZE: usize = refcode::SLOP30_CHARS.len() * refcode::SLOP30_CHARS.len();
 
 #[derive(Debug)]
 pub struct NewInputs {
@@ -127,8 +128,15 @@ fn cmd_new_title(
     };
     let period = period.unwrap_or_else(current_period);
     let snapshot = scan_roots(&config.allocation_roots())?;
-    let tails = random_tails(ATTEMPT_BUDGET);
-    let plan = plan_new(title, root, period, &snapshot, tails)?;
+    let tails = randomized_tail_space();
+    let plan = plan_new(
+        title,
+        root,
+        period,
+        &snapshot,
+        &config.ref_prefix_policy,
+        tails,
+    )?;
 
     if dry_run {
         return Ok(plan_to_result(&plan, true));
@@ -312,11 +320,12 @@ fn scan_root_into(snapshot: &mut ScanSnapshot, root: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn plan_new<I>(
+pub(crate) fn plan_new<I>(
     title: String,
     root: PathBuf,
     period: String,
     snapshot: &ScanSnapshot,
+    ref_prefix_policy: &refcode::RefPrefixPolicy,
     tails: I,
 ) -> Result<NewPlan>
 where
@@ -327,13 +336,22 @@ where
         bail!("task title must contain at least one ASCII letter or digit");
     }
 
-    let seq = snapshot.next_seq(&period)?;
+    let mut seq = snapshot.next_seq(&period)?;
+    while !ref_prefix_policy.allows_any_in_sequence(seq) {
+        seq = seq
+            .checked_add(1)
+            .filter(|seq| *seq <= refcode::MAX_SEQ)
+            .ok_or_else(|| anyhow::anyhow!("monthly sequence exhausted for {period}"))?;
+    }
     let mut candidates = Vec::new();
 
-    for tail in tails.into_iter().take(ATTEMPT_BUDGET) {
+    for tail in tails.into_iter().take(TAIL_SPACE_SIZE) {
         let Some(sid_ref) = refcode::encode_ref(seq, tail) else {
             continue;
         };
+        if ref_prefix_policy.denies(&sid_ref) {
+            continue;
+        }
         if snapshot.is_occupied(&period, &sid_ref) {
             continue;
         }
@@ -344,10 +362,13 @@ where
             path: root.join(&id),
             id,
         });
+        if candidates.len() == CANDIDATE_BUDGET {
+            break;
+        }
     }
 
     if candidates.is_empty() {
-        bail!("could not allocate an unoccupied ref for {period} after {ATTEMPT_BUDGET} attempts");
+        bail!("could not allocate an unoccupied ref for {period} from the candidate tail space");
     }
 
     Ok(NewPlan {
@@ -365,8 +386,16 @@ pub(crate) fn plan_random_new(
     root: PathBuf,
     period: String,
     snapshot: &ScanSnapshot,
+    ref_prefix_policy: &refcode::RefPrefixPolicy,
 ) -> Result<NewPlan> {
-    plan_new(title, root, period, snapshot, random_tails(ATTEMPT_BUDGET))
+    plan_new(
+        title,
+        root,
+        period,
+        snapshot,
+        ref_prefix_policy,
+        randomized_tail_space(),
+    )
 }
 
 pub fn execute_new(plan: &NewPlan) -> Result<NewResult> {
@@ -410,13 +439,15 @@ fn candidate_to_result(plan: &NewPlan, candidate: &NewCandidate, dry_run: bool) 
     }
 }
 
-fn random_tails(count: usize) -> Vec<RefTail> {
-    (0..count)
-        .map(|_| RefTail {
-            hi: refcode::SLOP30_CHARS[fastrand::usize(..refcode::SLOP30_CHARS.len())],
-            lo: refcode::SLOP30_CHARS[fastrand::usize(..refcode::SLOP30_CHARS.len())],
-        })
-        .collect()
+fn randomized_tail_space() -> Vec<RefTail> {
+    let mut tails = Vec::with_capacity(TAIL_SPACE_SIZE);
+    for hi in refcode::SLOP30_CHARS {
+        for lo in refcode::SLOP30_CHARS {
+            tails.push(RefTail { hi, lo });
+        }
+    }
+    fastrand::shuffle(&mut tails);
+    tails
 }
 
 #[cfg(test)]
@@ -425,6 +456,10 @@ mod tests {
 
     fn tail(hi: char, lo: char) -> RefTail {
         RefTail { hi, lo }
+    }
+
+    fn prude_policy() -> refcode::RefPrefixPolicy {
+        refcode::RefPrefixPolicy::prude()
     }
 
     fn planner_snapshot_with_occupied_ref_only(period: &str, sid_ref: &str) -> ScanSnapshot {
@@ -466,6 +501,7 @@ mod tests {
             PathBuf::from("/tmp/stm"),
             "202605".to_string(),
             &snapshot,
+            &prude_policy(),
             [tail('a', '2')],
         )
         .unwrap();
@@ -488,12 +524,152 @@ mod tests {
             PathBuf::from("/tmp/stm"),
             "202605".to_string(),
             &snapshot,
+            &prude_policy(),
             [tail('a', '2')],
         )
         .unwrap();
 
         assert_eq!(plan.seq, 2);
         assert_eq!(plan.candidates[0].id, "202605_sa4a2_review-login");
+    }
+
+    #[test]
+    fn plan_allocates_before_and_skips_over_prude_blocked_sequence() {
+        let mut before_snapshot = ScanSnapshot::empty();
+        before_snapshot.record("202605".to_string(), "sev2a".to_string(), 145);
+
+        let before_plan = plan_new(
+            "before reserved".to_string(),
+            PathBuf::from("/tmp/stm"),
+            "202605".to_string(),
+            &before_snapshot,
+            &prude_policy(),
+            [tail('2', 'a')],
+        )
+        .unwrap();
+
+        assert_eq!(before_plan.seq, 146);
+        assert_eq!(before_plan.candidates[0].sid_ref, "sew2a");
+
+        let mut skip_snapshot = ScanSnapshot::empty();
+        skip_snapshot.record("202605".to_string(), "sew2a".to_string(), 146);
+
+        let skip_plan = plan_new(
+            "after reserved".to_string(),
+            PathBuf::from("/tmp/stm"),
+            "202605".to_string(),
+            &skip_snapshot,
+            &prude_policy(),
+            [tail('2', 'a')],
+        )
+        .unwrap();
+
+        assert_eq!(skip_plan.seq, 148);
+        assert_eq!(skip_plan.candidates[0].sid_ref, "sey2a");
+    }
+
+    #[test]
+    fn plan_filters_every_prude_four_character_prefix() {
+        let period = "202605";
+        let policy = prude_policy();
+
+        for reserved in [
+            "shat", "smut", "spaz", "stfu", "scat", "scum", "shag", "suck",
+        ] {
+            let reserved_ref = format!("{reserved}2");
+            assert!(refcode::is_generated_ref(&reserved_ref), "{reserved_ref}");
+            let seq = refcode::decode_seq(&reserved_ref).unwrap();
+            let mut max_seq = HashMap::new();
+            max_seq.insert(period.to_string(), seq - 1);
+            let snapshot = ScanSnapshot {
+                occupied: HashMap::new(),
+                max_seq,
+            };
+            let reserved_tail_hi = reserved.chars().nth(3).unwrap();
+
+            let plan = plan_new(
+                format!("avoid {reserved}"),
+                PathBuf::from("/tmp/stm"),
+                period.to_string(),
+                &snapshot,
+                &policy,
+                [tail(reserved_tail_hi, '2'), tail('v', '2')],
+            )
+            .unwrap();
+
+            assert_eq!(plan.candidates.len(), 1, "{reserved}");
+            assert!(
+                !policy.denies(&plan.candidates[0].sid_ref),
+                "{reserved}: {}",
+                plan.candidates[0].sid_ref
+            );
+        }
+    }
+
+    #[test]
+    fn denied_raw_tails_do_not_consume_the_viable_candidate_budget() {
+        let denied_prefixes = refcode::SLOP30_CHARS
+            .into_iter()
+            .filter(|tail_hi| *tail_hi != 'z')
+            .map(|tail_hi| format!("sea{tail_hi}"))
+            .collect();
+        let policy = refcode::RefPrefixPolicy::try_from_prefixes(denied_prefixes).unwrap();
+        let tails = refcode::SLOP30_CHARS.into_iter().flat_map(|hi| {
+            refcode::SLOP30_CHARS
+                .into_iter()
+                .map(move |lo| tail(hi, lo))
+        });
+
+        let plan = plan_new(
+            "sparse custom policy".to_string(),
+            PathBuf::from("/tmp/stm"),
+            "202605".to_string(),
+            &ScanSnapshot::empty(),
+            &policy,
+            tails,
+        )
+        .unwrap();
+
+        assert_eq!(plan.candidates.len(), 8);
+        assert!(
+            plan.candidates
+                .iter()
+                .all(|candidate| candidate.sid_ref.starts_with("seaz"))
+        );
+    }
+
+    #[test]
+    fn randomized_tail_space_is_complete_and_without_replacement() {
+        let tails = randomized_tail_space();
+        let unique = tails
+            .iter()
+            .map(|tail| (tail.hi, tail.lo))
+            .collect::<HashSet<_>>();
+
+        assert_eq!(tails.len(), TAIL_SPACE_SIZE);
+        assert_eq!(unique.len(), tails.len());
+    }
+
+    #[test]
+    fn planner_retains_at_most_the_unique_candidate_budget() {
+        let policy = refcode::RefPrefixPolicy::try_from_prefixes(Vec::new()).unwrap();
+        let plan = plan_new(
+            "candidate budget".to_string(),
+            PathBuf::from("/tmp/stm"),
+            "202605".to_string(),
+            &ScanSnapshot::empty(),
+            &policy,
+            randomized_tail_space(),
+        )
+        .unwrap();
+        let unique = plan
+            .candidates
+            .iter()
+            .map(|candidate| candidate.sid_ref.as_str())
+            .collect::<HashSet<_>>();
+
+        assert_eq!(plan.candidates.len(), CANDIDATE_BUDGET);
+        assert_eq!(unique.len(), plan.candidates.len());
     }
 
     #[test]
@@ -625,6 +801,7 @@ mod tests {
             root,
             "202605".to_string(),
             &snapshot,
+            &prude_policy(),
             [tail('a', '2')],
         )
         .unwrap();
@@ -646,7 +823,31 @@ mod tests {
             PathBuf::from("/tmp/stm"),
             "202605".to_string(),
             &snapshot,
+            &prude_policy(),
             [tail('a', '2')],
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("monthly sequence exhausted"));
+    }
+
+    #[test]
+    fn plan_errors_when_policy_blocks_the_final_monthly_sequence() {
+        let mut snapshot = ScanSnapshot::empty();
+        snapshot.record(
+            "202605".to_string(),
+            "szy2a".to_string(),
+            refcode::MAX_SEQ - 1,
+        );
+        let policy = refcode::RefPrefixPolicy::try_from_prefixes(vec!["szz".to_string()]).unwrap();
+
+        let err = plan_new(
+            "blocked final slot".to_string(),
+            PathBuf::from("/tmp/stm"),
+            "202605".to_string(),
+            &snapshot,
+            &policy,
+            [tail('2', 'a')],
         )
         .unwrap_err();
 
@@ -667,6 +868,7 @@ mod tests {
             PathBuf::from("/tmp/stm"),
             "202605".to_string(),
             &snapshot,
+            &prude_policy(),
             [tail('2', 'a')],
         )
         .unwrap();
@@ -686,6 +888,7 @@ mod tests {
             PathBuf::from("/tmp/stm"),
             period,
             &snapshot,
+            &prude_policy(),
             [tail('a', 'b'), tail('2', 'a')],
         )
         .unwrap();
@@ -706,6 +909,7 @@ mod tests {
             PathBuf::from("/tmp/stm"),
             "202605".to_string(),
             &snapshot,
+            &prude_policy(),
             [tail('1', 'a'), tail('a', '2')],
         )
         .unwrap();
@@ -723,6 +927,7 @@ mod tests {
             PathBuf::from("/tmp/stm"),
             "202605".to_string(),
             &snapshot,
+            &prude_policy(),
             [tail('a', 'b'), tail('c', 'd')],
         )
         .unwrap_err();
@@ -746,6 +951,7 @@ mod tests {
             PathBuf::from("/tmp/stm"),
             period.to_string(),
             &snapshot,
+            &prude_policy(),
             [tail('2', 'a'), tail('3', 'a')],
         )
         .unwrap();
@@ -771,6 +977,7 @@ mod tests {
             PathBuf::from("/tmp/stm"),
             period.to_string(),
             &snapshot,
+            &prude_policy(),
             [tail('2', 'a')],
         )
         .unwrap_err();
@@ -798,6 +1005,7 @@ mod tests {
             PathBuf::from("/tmp/stm"),
             "2026_05".to_string(),
             &snapshot,
+            &prude_policy(),
             [tail('a', '2')],
         )
         .unwrap_err();
@@ -814,6 +1022,7 @@ mod tests {
             PathBuf::from("/tmp/stm"),
             "2026_05".to_string(),
             &snapshot,
+            &prude_policy(),
             [tail('a', '2')],
         )
         .unwrap_err();
@@ -830,6 +1039,7 @@ mod tests {
             PathBuf::from("/tmp/stm"),
             "202605".to_string(),
             &snapshot,
+            &prude_policy(),
             [tail('2', 'a')],
         )
         .unwrap();
@@ -853,6 +1063,7 @@ mod tests {
             root,
             "202605".to_string(),
             &snapshot,
+            &prude_policy(),
             [tail('2', 'a'), tail('3', 'a')],
         )
         .unwrap();
@@ -876,6 +1087,7 @@ mod tests {
             root,
             "202605".to_string(),
             &snapshot,
+            &prude_policy(),
             [tail('2', 'a'), tail('3', 'a')],
         )
         .unwrap();
@@ -900,6 +1112,7 @@ mod tests {
             root.clone(),
             "202605".to_string(),
             &snapshot,
+            &prude_policy(),
             [tail('a', '2')],
         )
         .unwrap();
@@ -923,6 +1136,7 @@ mod tests {
             root,
             "202605".to_string(),
             &snapshot,
+            &prude_policy(),
             [tail('2', 'a'), tail('3', 'a')],
         )
         .unwrap();

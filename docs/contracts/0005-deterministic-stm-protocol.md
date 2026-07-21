@@ -37,6 +37,11 @@ project-relative and reject absolute, parent, empty, current-directory, and
 unknown settings. Missing typed roots are successful empty sources. Existing
 task-only configs remain valid.
 
+An optional `[ref].deny_prefixes` array is an exact replacement for the
+built-in `prude` policy. Omitting it uses `prude`; setting it to `[]` allows
+every otherwise valid generated ref. Contract 0001 owns its validation and
+allocation semantics.
+
 `sid resolve`, `sid graph`, and `sid lint` use the composed canonical index.
 Task/review nodes retain Contract 0004 ordering. They sort before file-backed
 nodes; seed/topic nodes sort by timestamp, id, and path. The seed filename's
@@ -45,7 +50,8 @@ frontmatter only.
 
 `sid list`, ordinary `sid new`, and `new --into` retain their existing task-root
 results. Seed files share allocation ref occupancy but are neither list entries
-nor allocation destinations.
+nor allocation destinations. Ordinary task and seed allocation share the
+generated-prefix policy in Contract 0001.
 
 ## Deterministic read/query commands
 
@@ -120,6 +126,8 @@ Title-only birth is valid. Non-TTY stdin supplies an optional body unless
 `--edit` explicitly selects the editor. Dry-run validates title and exact
 origins without consuming input, opening an editor, creating roots, or writing.
 Duplicate origins fail. A real write uses same-directory no-clobber persistence.
+Seed ref generation uses the same resolved deny-prefix list as ordinary
+`sid new`.
 
 The seed filename is `{YYYYMM}_{ref}_{slug}.md`; canonical `id` is the short
 ref. JSON-compatible frontmatter contains `type`, `id`, `title`, current local

@@ -465,6 +465,7 @@ fn list_reports_recognized_entries_across_all_roots_sorted() {
     )
     .unwrap();
     std::fs::create_dir(stm.join(".slow").join("202606_sdg2a_slow-burn")).unwrap();
+    std::fs::create_dir(stm.join(".archive").join("202606_sex2a_legacy")).unwrap();
     std::fs::create_dir(stm.join(".archive").join("202605_szza2_old")).unwrap();
     // Ignored: non-recognized refs and non-task names.
     std::fs::create_dir(stm.join("202606_sdmr192_widened")).unwrap();
@@ -483,6 +484,7 @@ fn list_reports_recognized_entries_across_all_roots_sorted() {
             "202606_sde2a",
             "202606_sdf2a_export-dump.zip",
             "202606_sdg2a_slow-burn",
+            "202606_sex2a_legacy",
         ]
     );
 
@@ -932,6 +934,87 @@ fn new_period_override_uses_deterministic_start_for_empty_month() {
 }
 
 #[test]
+fn new_defaults_to_prude_policy_and_scans_legacy_refs() {
+    for existing_ref in ["sew2a", "sex2a"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("stm");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir(root.join(format!("202605_{existing_ref}_existing"))).unwrap();
+
+        let output = bin_cmd()
+            .args(["new", "after reserved", "--dry-run", "--period", "202605"])
+            .current_dir(tmp.path())
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+
+        let json = parse_stdout_json(&output);
+        let sid_ref = json["sid_ref"].as_str().unwrap();
+        assert!(sid_ref.starts_with("sey"), "{existing_ref}: {sid_ref}");
+    }
+}
+
+#[test]
+fn configured_ref_deny_prefixes_replace_the_prude_default() {
+    let unfiltered = tempfile::tempdir().unwrap();
+    std::fs::write(
+        unfiltered.path().join(".sid"),
+        "[ref]\ndeny_prefixes = []\n",
+    )
+    .unwrap();
+    let root = unfiltered.path().join("stm");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir(root.join("202605_sew2a_existing")).unwrap();
+
+    let output = bin_cmd()
+        .args(["new", "unfiltered", "--dry-run", "--period", "202605"])
+        .current_dir(unfiltered.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json = parse_stdout_json(&output);
+    assert!(json["sid_ref"].as_str().unwrap().starts_with("sex"));
+
+    let custom = tempfile::tempdir().unwrap();
+    std::fs::write(
+        custom.path().join(".sid"),
+        "[ref]\ndeny_prefixes = [\"sey\"]\n",
+    )
+    .unwrap();
+    let root = custom.path().join("stm");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir(root.join("202605_sew2a_existing")).unwrap();
+
+    let output = bin_cmd()
+        .args(["new", "custom replaces", "--dry-run", "--period", "202605"])
+        .current_dir(custom.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json = parse_stdout_json(&output);
+    assert!(json["sid_ref"].as_str().unwrap().starts_with("sex"));
+
+    std::fs::create_dir(root.join("202605_sex2a_existing")).unwrap();
+
+    let output = bin_cmd()
+        .args(["new", "custom policy", "--dry-run", "--period", "202605"])
+        .current_dir(custom.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json = parse_stdout_json(&output);
+    assert!(json["sid_ref"].as_str().unwrap().starts_with("sez"));
+}
+
+#[test]
 fn new_period_override_allocates_final_sequence_then_exhausts() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("stm");
@@ -1374,6 +1457,7 @@ fn typed_config_paths_validate_and_unknown_keys_fail_closed() {
         "[task]\nroot = \"stm\"\n[topic]\nroots = [\".\"]\n",
         "[task]\nroot = \"stm\"\n[queue]\ndays = 7\n",
         "[task]\nroot = \"stm\"\n[seed]\nroots = []\n",
+        "[ref]\nprefixes = []\n",
     ] {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join(".sid"), config).unwrap();
@@ -1383,6 +1467,30 @@ fn typed_config_paths_validate_and_unknown_keys_fail_closed() {
             .output()
             .unwrap();
         assert!(!output.status.success(), "unexpected success for {config}");
+        assert!(output.stdout.is_empty());
+    }
+}
+
+#[test]
+fn configured_ref_deny_prefixes_fail_closed_when_invalid() {
+    for prefix in ["se", "sex2a", "Sex", "si2", "sa22"] {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(".sid"),
+            format!("[ref]\ndeny_prefixes = [\"{prefix}\"]\n"),
+        )
+        .unwrap();
+
+        let output = bin_cmd()
+            .args(["new", "invalid policy", "--dry-run"])
+            .current_dir(tmp.path())
+            .assert()
+            .failure()
+            .get_output()
+            .clone();
+
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("deny_prefixes"), "{prefix}: {stderr}");
         assert!(output.stdout.is_empty());
     }
 }

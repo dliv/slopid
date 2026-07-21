@@ -1,7 +1,7 @@
 # Contract 0001 - `sid new` dry-run slice
 
 Date: 2026-05-31
-Updated: 2026-06-12
+Updated: 2026-07-20
 Status: Active
 
 ## Milestone
@@ -39,6 +39,8 @@ where `ref` uses the recommended 1134 design from
 - With no config, the task root is `stm` under the current directory.
 - With no config, the additional scan roots are `stm/.pending`, `stm/.prs`, `stm/.slow`,
   and `stm/.archive`.
+- With no ref-policy override, generation uses the built-in `prude` deny-prefix
+  list documented below.
 - `sid new` creates the task root if it is missing.
 - `sid new --dry-run` does not create the task root.
 - Scan direct children only.
@@ -68,6 +70,13 @@ root = "stm"
 scan_roots = ["stm/.pending", "stm/.prs", "stm/.slow", "stm/.archive"]
 ```
 
+An optional exact prefix-policy override is:
+
+```toml
+[ref]
+deny_prefixes = ["sex", "shat"]
+```
+
 - `[task].root` is the active task root used for newly allocated folders. It
   defaults to `stm`.
 - `[task].scan_roots` is the list of additional direct-child scan roots. It
@@ -75,6 +84,9 @@ scan_roots = ["stm/.pending", "stm/.prs", "stm/.slow", "stm/.archive"]
   is omitted. In a hand-written config with `[task].root` but no
   `[task].scan_roots`, the additional scan roots default to `.pending`, `.prs`, `.slow`,
   and `.archive` under the configured active root.
+- Omitted `[ref].deny_prefixes` selects the built-in `prude` list. A present
+  array replaces that list exactly; `deny_prefixes = []` allows every
+  otherwise valid generated ref.
 - Unknown `.sid` keys fail closed instead of being ignored.
 - Configured paths must be relative, must not contain `..`, must name at least
   one real path segment (empty strings and `.` fail closed), and are resolved
@@ -126,6 +138,42 @@ scan_roots = ["stm/.pending", "stm/.prs", "stm/.slow", "stm/.archive"]
   partway, fail the allocation; do not backtrack and reuse a sequence that
   may have been present moments earlier.
 
+## Generated Prefix Policy
+
+Owner decision 2026-07-20: generation defaults to a built-in `prude` list:
+`sex`, `shat`, `smut`, `spaz`, `stfu`, `scat`, `scum`, `shag`, and `suck`.
+This is a small, reviewed preset rather than a dictionary or external
+dependency.
+
+Configuration resolves once to a single deny-prefix list:
+
+- omitted `[ref].deny_prefixes` uses `prude`;
+- a present list is the complete replacement, not an addition to `prude`;
+- an explicitly empty list disables prefix filtering.
+
+Each configured entry must be a unique, reachable three- or four-character
+generated-ref prefix beginning with lowercase `s` and containing only lowercase
+ASCII letters or digits. Invalid or duplicate entries fail config loading.
+
+The allocator applies one rule: a candidate is denied when it starts with an
+entry in the resolved list. If no valid candidate in a sequence survives, the
+allocator advances generically to the next sequence. There is no separate
+sequence list or special case for `sex`; under `prude`, all sequence-147 refs
+begin with `sex`, so sequence 147 has no surviving candidate.
+
+Production randomizes the complete 30-by-30 tail space without replacement and
+scans that ordering for generated, policy-allowed, unoccupied refs. Invalid and
+denied raw tails do not consume the 100-candidate filesystem-race retry budget.
+Therefore any sequence declared viable produces a candidate whenever at least
+one policy-allowed ref is unoccupied; restrictive valid policies cannot fail
+merely because random sampling missed their survivors.
+
+The policy applies to ordinary `sid new` allocation and `sid seed`. Seed
+graduation preserves its existing identity and does not allocate a new ref.
+Readers remain tolerant: recognition, decoding, scanning, listing, and linting
+continue to accept existing matching refs. Historical identities are never
+renamed or migrated by this rule.
+
 ## Ref Design Test Matrix
 
 | Constraint | Status |
@@ -137,9 +185,20 @@ scan_roots = ["stm/.pending", "stm/.prs", "stm/.slow", "stm/.archive"]
 | Digit-run generation rule | tested |
 | Deterministic `seq_start(period)` vectors | tested |
 | Empty-month allocation uses deterministic start | tested |
-| Existing max sequence allocates `max + 1` | tested |
+| Existing max sequence allocates the next policy-viable value (normally `max + 1`) | tested |
+| Default `prude` skips sequence 147 while 146 and 148 remain allocatable | tested |
+| Exact four-character denied prefixes redraw; nearby strings remain allowed | tested |
+| Omitted/custom/empty prefix policy selects `prude`/replacement/unfiltered | tested |
+| One policy list derives candidate rejection and whole-sequence viability | tested |
+| Complete tail space is randomized without replacement | tested |
+| Denied/invalid raw tails do not consume the viable-candidate budget | tested |
+| Planner retains at most 100 unique race-retry candidates | tested |
+| Invalid lengths, shapes, unreachable prefixes, and duplicates fail closed | tested |
+| Prefix policy applies to both `sid new` and `sid seed` | tested |
+| Existing matching refs remain recognized and affect scanning | tested |
 | Monthly exhaustion at `seq > 659` | tested |
 | Final monthly sequence `659` remains allocatable | tested |
+| Policy-blocked final sequence reports monthly exhaustion | tested |
 | Occupied refs reserve namespace independent of slug | tested |
 | Additional scan dirs reserve the same namespace | tested |
 | Missing/unreadable configured dirs behavior | tested |

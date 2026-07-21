@@ -4,6 +4,8 @@ use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Component, Path, PathBuf};
 
+use crate::refcode::RefPrefixPolicy;
+
 const DEFAULT_ROOT: &str = "stm";
 const DEFAULT_SCAN_ROOT_NAMES: [&str; 4] = [".pending", ".prs", ".slow", ".archive"];
 const DEFAULT_SEED_ROOT_NAME: &str = ".seeds";
@@ -21,6 +23,7 @@ pub struct ProjectConfig {
     pub note_root: PathBuf,
     pub topic_roots: Vec<PathBuf>,
     pub stale_after_days: u64,
+    pub(crate) ref_prefix_policy: RefPrefixPolicy,
 }
 
 impl ProjectConfig {
@@ -62,6 +65,8 @@ struct SidConfigFile {
     topic: SidTopicConfig,
     #[serde(default)]
     queue: SidQueueConfig,
+    #[serde(default, rename = "ref")]
+    ref_config: SidRefConfig,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -90,11 +95,23 @@ struct SidQueueConfig {
     stale_after_days: Option<u64>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SidRefConfig {
+    deny_prefixes: Option<Vec<String>>,
+}
+
 pub fn load_project_config(cwd: &Path) -> Result<ProjectConfig> {
     let cwd = cwd
         .canonicalize()
         .with_context(|| format!("resolve current directory {}", cwd.display()))?;
     let (base, config) = discover_config(&cwd)?;
+
+    let ref_prefix_policy = match config.ref_config.deny_prefixes {
+        Some(prefixes) => RefPrefixPolicy::try_from_prefixes(prefixes)
+            .with_context(|| format!("validate project config {}", base.join(".sid").display()))?,
+        None => RefPrefixPolicy::prude(),
+    };
 
     let configured_root = config
         .task
@@ -153,6 +170,7 @@ pub fn load_project_config(cwd: &Path) -> Result<ProjectConfig> {
             .queue
             .stale_after_days
             .unwrap_or(DEFAULT_STALE_AFTER_DAYS),
+        ref_prefix_policy,
     })
 }
 

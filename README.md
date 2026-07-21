@@ -39,6 +39,14 @@ sid search deployment
 directory. Without one, it uses `stm/` beneath the current directory. Paths in
 `.sid` are project-relative.
 
+Generated refs default to the built-in `prude` prefix policy. A project can
+replace it exactly—including disabling it with an empty array:
+
+```toml
+[ref]
+deny_prefixes = []
+```
+
 ## Commands
 
 ```text

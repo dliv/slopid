@@ -12,7 +12,7 @@ with the existing task allocator difficult to verify.
 
 ## Decision
 
-Configuration uses purpose-named task, seed, note, topic, and queue tables.
+Configuration uses purpose-named task, seed, note, topic, queue, and ref tables.
 Canonical discovery composes typed sources while keeping allocation and list
 semantics explicit. Read/query commands return deterministic JSON and preserve
 usable partial results with completeness findings. Mutation commands expose
@@ -34,6 +34,11 @@ independently proven files to succeed. Queue artifacts remain verbatim because
 their transient authored content is outside structural repair.
 
 Workspace rituals and relevance or filing judgment remain outside Slopid.
+
+The ref table controls generation only. Its optional deny-prefix array replaces
+the built-in `prude` policy exactly; omission uses that preset and an explicit
+empty array allows all otherwise valid refs. Both task and seed allocation
+resolve this boundary to one typed prefix list, while readers remain tolerant.
 
 ## Consequences
 

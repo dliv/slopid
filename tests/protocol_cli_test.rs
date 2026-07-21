@@ -575,10 +575,13 @@ fn help_and_agent_instructions_describe_read_query_commands() {
         "sid relink",
         "sid relink --write",
         "applied",
-        "task semantics are unchanged",
+        "[ref].deny_prefixes",
+        "Apart from generated-prefix selection",
+        "`sid list` reader semantics are unchanged",
     ] {
         assert!(text.contains(phrase), "missing {phrase}");
     }
+    assert!(!text.contains("task semantics are unchanged"));
 }
 
 #[test]

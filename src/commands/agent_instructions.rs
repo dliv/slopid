@@ -11,8 +11,11 @@ const TEXT: &str = "\
 sid allocates local task folders with short refs such as sa2a7.
 
 Use `sid init` to write the default project config when a repo does not have one.
-Configuration has purpose-named task, seed, note, topic, and queue tables. Topic
-roots are explicit; seed and note roots default beneath the configured task root.
+Configuration has purpose-named task, seed, note, topic, queue, and ref tables.
+Topic roots are explicit; seed and note roots default beneath the configured task
+root. Generated refs default to the built-in prude deny-prefix list. A present
+`[ref].deny_prefixes` array replaces it exactly; an empty array allows every
+otherwise valid generated ref.
 Use `sid new \"task title\"` when starting a durable task folder.
 Use `sid new --dry-run \"task title\"` to preview the folder path.
 Use `sid new --into .slow \"task title\"` to allocate into a configured scan root.
@@ -35,7 +38,8 @@ After reviewing `complete`, `applied`, `changes`, and `findings`, use
 The read/query commands are read-only and emit JSON by default. Inspect `complete`
 and `findings` before treating partial context as authoritative. Parse canonical
 node frontmatter instead of inferring identity or graph role from folder paths.
-Ordinary `sid new`, `sid new --into`, and `sid list` task semantics are unchanged.
+Apart from generated-prefix selection, ordinary `sid new` and `sid new --into`
+destination semantics and `sid list` reader semantics are unchanged.
 Cite the full sXXXX ref in notes and messages.
 Do not invent refs by hand for durable task folders.
 ";

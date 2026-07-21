@@ -1,8 +1,22 @@
+use anyhow::{Result, bail};
+use std::collections::HashSet;
+
 pub const ALPHA22: &str = "abcdefghjkmnpqrtuvwxyz";
 pub const SLOP30: &str = "23456789abcdefghjkmnpqrtuvwxyz";
 pub const DIGITS: &str = "23456789";
 pub const START6: &str = "abcdef";
 pub const MAX_SEQ: u16 = 659;
+
+// Derived by exhaustively enumerating reachable three- and four-character
+// generated prefixes, intersecting them with Webster web2, LDNOOBW, and CUSS,
+// then manually reviewing corpus misses and false positives. `sex` was the
+// only credible problematic three-character hit; the owner selected these
+// eight four-character candidates as the broad exact preset. Ordinary hits
+// such as `see` remain allowed. Keep this fixed and owner-reviewed rather than
+// turning it into a runtime dictionary or generalized profanity filter.
+const PRUDE_DENY_PREFIXES: [&str; 9] = [
+    "sex", "shat", "smut", "spaz", "stfu", "scat", "scum", "shag", "suck",
+];
 
 pub const ALPHA22_CHARS: [char; 22] = [
     'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'j', 'k', 'm', 'n', 'p', 'q', 'r', 't', 'u', 'v', 'w',
@@ -20,6 +34,64 @@ const FNV_PRIME: u32 = 16_777_619;
 pub struct RefTail {
     pub hi: char,
     pub lo: char,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RefPrefixPolicy {
+    denied_prefixes: HashSet<String>,
+}
+
+impl RefPrefixPolicy {
+    pub(crate) fn prude() -> Self {
+        Self {
+            denied_prefixes: PRUDE_DENY_PREFIXES.map(str::to_string).into(),
+        }
+    }
+
+    pub(crate) fn try_from_prefixes(denied_prefixes: Vec<String>) -> Result<Self> {
+        let mut seen = HashSet::new();
+        for prefix in denied_prefixes {
+            if !is_reachable_generated_prefix(&prefix) {
+                bail!(
+                    "invalid [ref].deny_prefixes entry {prefix:?}: expected a reachable 3- or 4-character generated ref prefix beginning with 's'"
+                );
+            }
+            if !seen.insert(prefix.clone()) {
+                bail!("duplicate [ref].deny_prefixes entry: {prefix:?}");
+            }
+        }
+
+        Ok(Self {
+            denied_prefixes: seen,
+        })
+    }
+
+    #[cfg(test)]
+    fn denied_prefixes(&self) -> &HashSet<String> {
+        &self.denied_prefixes
+    }
+
+    pub(crate) fn denies(&self, sid_ref: &str) -> bool {
+        [sid_ref.get(..3), sid_ref.get(..4)]
+            .into_iter()
+            .flatten()
+            .any(|prefix| self.denied_prefixes.contains(prefix))
+    }
+
+    pub(crate) fn allows_any_in_sequence(&self, seq: u16) -> bool {
+        for hi in SLOP30_CHARS {
+            for lo in SLOP30_CHARS {
+                let tail = RefTail { hi, lo };
+                if let Some(sid_ref) = encode_ref(seq, tail)
+                    && !self.denies(&sid_ref)
+                {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
 }
 
 pub fn encode_seq(seq: u16) -> Option<String> {
@@ -106,6 +178,47 @@ pub fn deterministic_seq_start(period: &str) -> Option<u16> {
     Some(hi_index * 30 + lo_index)
 }
 
+fn is_reachable_generated_prefix(prefix: &str) -> bool {
+    if !(3..=4).contains(&prefix.len())
+        || !prefix
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        || !prefix.starts_with('s')
+    {
+        return false;
+    }
+
+    let mut chars = prefix.chars();
+    chars.next();
+    let Some(seq_hi) = chars.next() else {
+        return false;
+    };
+    let Some(seq_lo) = chars.next() else {
+        return false;
+    };
+    let Some(seq_hi_index) = ALPHA22.find(seq_hi) else {
+        return false;
+    };
+    let Some(seq_lo_index) = SLOP30.find(seq_lo) else {
+        return false;
+    };
+    let seq = (seq_hi_index * 30 + seq_lo_index) as u16;
+
+    let Some(tail_hi) = chars.next() else {
+        return true;
+    };
+    SLOP30_CHARS.into_iter().any(|tail_lo| {
+        encode_ref(
+            seq,
+            RefTail {
+                hi: tail_hi,
+                lo: tail_lo,
+            },
+        )
+        .is_some()
+    })
+}
+
 fn generated_tail_rule(seq_lo: char, tail: RefTail) -> bool {
     if DIGITS.contains(seq_lo) {
         ALPHA22.contains(tail.hi)
@@ -174,6 +287,99 @@ mod tests {
         assert!(is_recognized_ref("saabc"));
         assert!(!is_generated_ref("saabc"));
         assert!(!is_recognized_ref("s2a22"));
+    }
+
+    #[test]
+    fn prude_policy_is_exact_and_readers_remain_tolerant() {
+        let policy = RefPrefixPolicy::prude();
+        assert_eq!(policy.denied_prefixes().len(), 9);
+        for prefix in [
+            "sex", "shat", "smut", "spaz", "stfu", "scat", "scum", "shag", "suck",
+        ] {
+            assert!(policy.denied_prefixes().contains(prefix), "{prefix}");
+        }
+
+        for sid_ref in [
+            "sex2a", "shat2", "smut2", "spaz2", "stfu2", "scat2", "scum2", "shag2", "suck2",
+        ] {
+            assert!(is_generated_ref(sid_ref), "{sid_ref}");
+            assert!(policy.denies(sid_ref), "{sid_ref}");
+        }
+
+        for sid_ref in ["see2a", "spa2a", "std2a", "sux2a", "sxxx2"] {
+            assert!(!policy.denies(sid_ref), "{sid_ref}");
+        }
+
+        assert!(is_recognized_ref("sex2a"));
+        assert_eq!(decode_seq("sex2a"), Some(147));
+    }
+
+    #[test]
+    fn sequence_viability_is_derived_from_the_same_prefix_list() {
+        let prude = RefPrefixPolicy::prude();
+        assert_eq!(encode_seq(146).as_deref(), Some("ew"));
+        assert_eq!(encode_seq(147).as_deref(), Some("ex"));
+        assert_eq!(encode_seq(148).as_deref(), Some("ey"));
+        assert!(prude.allows_any_in_sequence(146));
+        assert!(!prude.allows_any_in_sequence(147));
+        assert!(prude.allows_any_in_sequence(148));
+
+        let custom = RefPrefixPolicy::try_from_prefixes(vec!["sey".to_string()]).unwrap();
+        assert!(custom.allows_any_in_sequence(147));
+        assert!(!custom.allows_any_in_sequence(148));
+
+        let four_character_prefixes = ALPHA22_CHARS
+            .into_iter()
+            .map(|tail_hi| format!("sa2{tail_hi}"))
+            .collect();
+        let custom = RefPrefixPolicy::try_from_prefixes(four_character_prefixes).unwrap();
+        assert!(!custom.allows_any_in_sequence(0));
+        assert!(custom.allows_any_in_sequence(1));
+    }
+
+    #[test]
+    fn exhaustive_four_character_policy_blocks_every_sequence() {
+        let mut prefixes = Vec::new();
+        for seq in 0..=MAX_SEQ {
+            let seq_text = encode_seq(seq).unwrap();
+            for tail_hi in SLOP30_CHARS {
+                let prefix = format!("s{seq_text}{tail_hi}");
+                if is_reachable_generated_prefix(&prefix) {
+                    prefixes.push(prefix);
+                }
+            }
+        }
+        assert_eq!(prefixes.len(), 18_392);
+        let policy = RefPrefixPolicy::try_from_prefixes(prefixes).unwrap();
+
+        for seq in 0..=MAX_SEQ {
+            assert!(!policy.allows_any_in_sequence(seq), "sequence {seq}");
+        }
+    }
+
+    #[test]
+    fn configured_prefixes_validate_length_shape_reachability_and_duplicates() {
+        for prefix in ["sex", "shat", "sa2", "sa2a"] {
+            assert!(
+                RefPrefixPolicy::try_from_prefixes(vec![prefix.to_string()]).is_ok(),
+                "{prefix}"
+            );
+        }
+
+        for prefix in ["se", "sex2a", "Sex", "si2", "sa22"] {
+            assert!(
+                RefPrefixPolicy::try_from_prefixes(vec![prefix.to_string()]).is_err(),
+                "{prefix}"
+            );
+        }
+
+        assert!(
+            RefPrefixPolicy::try_from_prefixes(vec!["sex".to_string(), "sex".to_string()]).is_err()
+        );
+
+        let unfiltered = RefPrefixPolicy::try_from_prefixes(Vec::new()).unwrap();
+        assert!(unfiltered.denied_prefixes().is_empty());
+        assert!(unfiltered.allows_any_in_sequence(147));
     }
 
     #[test]
