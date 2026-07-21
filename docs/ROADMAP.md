@@ -1,7 +1,7 @@
 # slop-id roadmap
 
 Date: 2026-05-31
-Updated: 2026-07-13
+Updated: 2026-07-20
 Status: Working draft
 
 This is the high-level project plan. Detailed execution notes live in `stm/`
@@ -84,17 +84,18 @@ by ref prefix or slug substring, case-insensitively — plus
 root (contract 0001). `sid find`/content search was not needed;
 direct-child scanning only, as planned.
 
-### 4. Agent Documentation And Dogfooding
+### 4. Agent Documentation And Dogfooding - Done
 
 Goal: make future agents effective without rereading every handoff note.
 
-Likely scope:
+Shipped in `v0.1.0`:
 
-- fuller `agent-instructions`, probably embedded from markdown with
-  `include_str!`;
-- short `README.md` or `AGENTS.md`;
-- examples for citing refs and using `rg sXXXX`;
-- dogfood `stm/` once the core flow is stable enough.
+- comprehensive JSON-wrapped `sid agent-instructions` guidance;
+- a public README with installation, command, and agent-integration guidance;
+- examples for allocating, resolving, searching, citing, capturing, and
+  repairing task memory;
+- sustained dogfooding as the task-memory substrate that motivated the
+  protocol.
 
 ### 3A. Deterministic STM Reader Spine - Done
 
@@ -126,16 +127,27 @@ does not choose relevance, drain inboxes, file notes, assign lifecycle status,
 or implement workspace rituals; those judgment-bearing consumers live outside
 this project.
 
-### 5. Optional Commands And Packaging
+### 5. Packaging And Release - Done
 
-Goal: add only the commands that prove useful in practice.
+`v0.1.0` ships checksum-verified macOS archives for Apple Silicon and Intel
+through GitHub Releases. The `dliv/tools` Homebrew tap installs the `sid` binary,
+and the release workflow updates the formula version and checksums after each
+`v*` tag.
 
-Possible scope:
+Public-release verification covered CI, both release artifacts, the formula
+update, a fresh Homebrew installation, and `sid --version`.
 
-- decide whether `sid id` should exist;
-- installation/package polish;
-- release/version story;
-- revisit separate `slop30`/refcode crate only if another consumer appears.
+### 6. Evidence-Led Follow-Ups
+
+There is no active feature milestone. Add only commands that prove useful in
+practice.
+
+Possible future scope:
+
+- decide whether `sid id` should exist (use `sid new --dry-run` meanwhile);
+- update GitHub Actions when upstream Node 24-native releases are proven;
+- add platform artifacts when real users require them;
+- revisit a separate `slop30`/refcode crate only if another consumer appears.
 
 ## Deferred By Default
 
