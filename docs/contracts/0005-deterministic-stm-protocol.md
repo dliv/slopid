@@ -72,7 +72,9 @@ match count descending, and path. Match counts are uncapped non-overlapping
 occurrences in matching UTF-8 text and searchable paths. Each result retains
 at most three excerpts, sorted by path and line. Excerpts contain exactly
 `path`, nullable `line`/`text`, and `truncated`; text is capped at 240 Unicode
-scalar values. Path-only excerpts have null line/text. Invalid UTF-8 is
+scalar values, elision markers included, and windows onto the line's first
+matching term: a term that fits inside the cap is shown whole, and a longer one
+is shown from its start. Path-only excerpts have null line/text. Invalid UTF-8 is
 non-text. Read failures produce partial exit-0 results; no usable configured
 source fails with empty stdout.
 

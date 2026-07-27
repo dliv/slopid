@@ -266,14 +266,11 @@ fn search_caps_excerpts_and_unicode_scalars_at_exact_boundaries() {
         .unwrap();
     assert_eq!(result["excerpts"].as_array().unwrap().len(), 3);
     assert_eq!(result["excerpts"][0]["truncated"], true);
-    assert_eq!(
-        result["excerpts"][0]["text"]
-            .as_str()
-            .unwrap()
-            .chars()
-            .count(),
-        240
-    );
+    let text = result["excerpts"][0]["text"].as_str().unwrap();
+    assert!(text.chars().count() <= 240, "cap holds: {text}");
+    // The term sits past the cap, where a prefix cut would have dropped it.
+    assert!(text.contains("needleunique"), "match must survive: {text}");
+    assert!(text.starts_with('…'), "left edge is elided: {text}");
 }
 
 #[test]
