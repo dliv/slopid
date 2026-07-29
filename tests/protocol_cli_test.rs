@@ -1085,6 +1085,45 @@ fn relink_colon_line_preserves_fragments_and_skips_external_ports() {
 }
 
 #[test]
+fn relink_colon_line_skips_digit_bearing_uri_schemes_before_preview_and_write() {
+    let tmp = typed_project();
+    configure_relink_extensions(tmp.path(), &["colon-line"]);
+    let source = tmp.path().join("knowledge/colon-line-external-scheme.md");
+    let authored = "[external](s3://example.test:443/202402_sa2a7_old/CURRENT_STATE.md:33#part)\n";
+    fs::write(&source, authored).unwrap();
+
+    let preview = sid()
+        .arg("relink")
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let preview = json(&preview);
+    assert_eq!(preview["complete"], true);
+    assert_eq!(preview["applied"], false);
+    assert!(preview["changes"].as_array().unwrap().is_empty());
+    assert!(preview["findings"].as_array().unwrap().is_empty());
+    assert_eq!(fs::read_to_string(&source).unwrap(), authored);
+
+    let written = sid()
+        .args(["relink", "--write"])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let written = json(&written);
+    assert_eq!(written["complete"], true);
+    assert_eq!(written["applied"], true);
+    assert!(written["changes"].as_array().unwrap().is_empty());
+    assert!(written["findings"].as_array().unwrap().is_empty());
+    assert_eq!(fs::read_to_string(source).unwrap(), authored);
+}
+
+#[test]
 fn relink_colon_line_prefers_an_existing_literal_colon_filename() {
     let tmp = typed_project();
     configure_relink_extensions(tmp.path(), &["colon-line"]);

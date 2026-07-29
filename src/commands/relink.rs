@@ -401,10 +401,9 @@ fn is_external(destination: &str) -> bool {
         return false;
     };
     let scheme = &destination[..colon];
-    !scheme.is_empty()
-        && scheme.chars().enumerate().all(|(offset, ch)| {
-            ch.is_ascii_alphabetic() || (offset > 0 && matches!(ch, '+' | '-' | '.'))
-        })
+    let mut chars = scheme.chars();
+    chars.next().is_some_and(|ch| ch.is_ascii_alphabetic())
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'))
 }
 
 fn is_supported_ref(value: &str) -> bool {
