@@ -23,7 +23,14 @@ pub struct ProjectConfig {
     pub note_root: PathBuf,
     pub topic_roots: Vec<PathBuf>,
     pub stale_after_days: u64,
+    pub(crate) relink_destination_extensions: Vec<RelinkDestinationExtension>,
     pub(crate) ref_prefix_policy: RefPrefixPolicy,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum RelinkDestinationExtension {
+    ColonLine,
 }
 
 impl ProjectConfig {
@@ -67,6 +74,8 @@ struct SidConfigFile {
     queue: SidQueueConfig,
     #[serde(default, rename = "ref")]
     ref_config: SidRefConfig,
+    #[serde(default)]
+    relink: SidRelinkConfig,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -99,6 +108,13 @@ struct SidQueueConfig {
 #[serde(deny_unknown_fields)]
 struct SidRefConfig {
     deny_prefixes: Option<Vec<String>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SidRelinkConfig {
+    #[serde(default)]
+    destination_extensions: Vec<RelinkDestinationExtension>,
 }
 
 pub fn load_project_config(cwd: &Path) -> Result<ProjectConfig> {
@@ -170,6 +186,7 @@ pub fn load_project_config(cwd: &Path) -> Result<ProjectConfig> {
             .queue
             .stale_after_days
             .unwrap_or(DEFAULT_STALE_AFTER_DAYS),
+        relink_destination_extensions: config.relink.destination_extensions,
         ref_prefix_policy,
     })
 }

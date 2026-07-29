@@ -42,6 +42,15 @@ built-in `prude` policy. Omitting it uses `prude`; setting it to `[]` allows
 every otherwise valid generated ref. Contract 0001 owns its validation and
 allocation semantics.
 
+An optional relink destination compatibility list is:
+
+    [relink]
+    destination_extensions = ["colon-line"]
+
+The list is a closed set of kebab-case names. Unknown names fail config parsing.
+Omitting `[relink]`, omitting `destination_extensions`, or setting it to `[]`
+are equivalent. `sid init` continues to omit this default-off optional table.
+
 `sid resolve`, `sid graph`, and `sid lint` use the composed canonical index.
 Task/review nodes retain Contract 0004 ordering. They sort before file-backed
 nodes; seed/topic nodes sort by timestamp, id, and path. The seed filename's
@@ -155,6 +164,18 @@ project ignore boundaries and excludes VCS metadata, `tmp`, every task
 CommonMark link/image destinations and reference definitions are candidates;
 code spans/fences, autolinks, external/schemed URLs, fragment-only links,
 labels, and ordinary prose are not.
+
+A Markdown destination remains a literal path by default; Markdown does not
+assign line-navigation meaning to a suffix such as `:33`. When the project
+enables the `colon-line` destination extension, relink recognizes exactly a
+terminal `:[1-9][0-9]*` on an otherwise local destination. It first checks the
+canonical literal path including that suffix. Only when the literal target does
+not exist does it check the canonical base path without the suffix. A proven
+replacement preserves the exact locator before any following fragment. Relink
+does not count target lines or validate editor navigation. External
+destinations, including URLs with ports, never enter extension handling. If
+neither literal nor base target exists, the result retains a
+`relink-missing-internal-target` finding.
 
 A local destination is eligible only when exactly one path component embeds a
 recognized task-folder or seed-file ref that resolves uniquely. Task moves

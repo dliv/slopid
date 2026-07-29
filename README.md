@@ -47,6 +47,22 @@ replace it exactly—including disabling it with an empty array:
 deny_prefixes = []
 ```
 
+Markdown destinations are literal by default, including filenames that end in
+text such as `:33`. Projects that intentionally author terminal editor-style
+line locators can opt into relink compatibility:
+
+```toml
+[relink]
+destination_extensions = ["colon-line"]
+```
+
+With `colon-line`, `sid relink` recognizes only a terminal positive decimal
+locator such as `:33`. It still gives an existing literal colon-suffixed file
+precedence; otherwise it resolves and checks the base file while preserving
+the locator and any following `#fragment`. It does not validate line counts.
+Omitting `[relink]` or using an empty list preserves the default literal-path
+behavior. Unknown extension names fail config parsing.
+
 ## Commands
 
 ```text

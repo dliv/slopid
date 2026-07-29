@@ -12,13 +12,13 @@ with the existing task allocator difficult to verify.
 
 ## Decision
 
-Configuration uses purpose-named task, seed, note, topic, queue, and ref tables.
-Canonical discovery composes typed sources while keeping allocation and list
-semantics explicit. Read/query commands return deterministic JSON and preserve
-usable partial results with completeness findings. Mutation commands expose
-bounded, inspectable state transitions; relink is preview-first and applies
-independently verified files atomically. Raw capture and inbox queues remain
-verbatim and outside relink.
+Configuration uses purpose-named task, seed, note, topic, queue, ref, and relink
+tables. Canonical discovery composes typed sources while keeping allocation and
+list semantics explicit. Read/query commands return deterministic JSON and
+preserve usable partial results with completeness findings. Mutation commands
+expose bounded, inspectable state transitions; relink is preview-first and
+applies independently verified files atomically. Raw capture and inbox queues
+remain verbatim and outside relink.
 
 Note capture writes at most one exclusive file and quarantines conservative
 credential-pattern matches without echoing content. Seeds share allocation
@@ -40,9 +40,19 @@ the built-in `prude` policy exactly; omission uses that preset and an explicit
 empty array allows all otherwise valid refs. Both task and seed allocation
 resolve this boundary to one typed prefix list, while readers remain tolerant.
 
+Relink destination extensions are a closed, default-off set in checked-in
+project configuration rather than a permissive CLI mode. The initial
+`colon-line` extension accommodates projects that intentionally use a terminal
+positive-decimal editor locator while keeping ordinary Markdown destinations
+literal by default. Resolution gives a real colon-suffixed target precedence,
+falls back to the stripped base only when enabled, and preserves rather than
+validates the locator. External destinations remain outside this mechanism.
+
 ## Consequences
 
 Callers can distinguish canonical owners from queue artifacts without path
 guessing. Existing task-only projects continue to work. Each new source or
 mutation needs an explicit contract and synthetic standalone-project proof;
 there is no generic source plugin mechanism or lifecycle/status model.
+Projects using host-style line locators must opt in durably; unknown extension
+names fail closed, and `sid init` does not silently enable compatibility.

@@ -60,6 +60,20 @@ fn typed_project() -> tempfile::TempDir {
     tmp
 }
 
+fn configure_relink_extensions(project: &Path, extensions: &[&str]) {
+    let path = project.join(".sid");
+    let mut config = fs::read_to_string(&path).unwrap();
+    let extensions = extensions
+        .iter()
+        .map(|extension| format!("\"{extension}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    config.push_str(&format!(
+        "\n[relink]\ndestination_extensions = [{extensions}]\n"
+    ));
+    fs::write(path, config).unwrap();
+}
+
 #[test]
 fn resolve_and_graph_compose_task_review_seed_and_topic_sources() {
     let tmp = typed_project();
@@ -895,6 +909,212 @@ fn relink_preview_and_write_repair_task_seed_image_and_reference_destinations() 
     assert!(text.contains("../parking/202403_sb3b8_parked.md"));
     assert!(text.contains("../history/202401_816d_old/CURRENT_STATE.md"));
     assert!(text.contains("[code](../old/202402_sa2a7_old/CURRENT_STATE.md)"));
+}
+
+#[test]
+fn relink_colon_line_is_literal_by_default_and_empty_config_is_equivalent() {
+    let tmp = typed_project();
+    let source = tmp.path().join("knowledge/colon-line-default.md");
+    let authored = "[task](../old/202402_sa2a7_old/CURRENT_STATE.md:33)\n";
+    fs::write(&source, authored).unwrap();
+
+    let omitted = sid()
+        .arg("relink")
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let omitted_json = json(&omitted);
+    assert_eq!(omitted_json["complete"], true);
+    assert_eq!(omitted_json["applied"], false);
+    assert!(omitted_json["changes"].as_array().unwrap().is_empty());
+    let finding = omitted_json["findings"]
+        .as_array()
+        .unwrap()
+        .first()
+        .unwrap();
+    assert_eq!(finding["code"], "relink-missing-internal-target");
+    assert_eq!(finding["id"], "sa2a7");
+    assert!(
+        finding["message"]
+            .as_str()
+            .unwrap()
+            .ends_with("work/202402_sa2a7_task/CURRENT_STATE.md:33")
+    );
+    assert_eq!(fs::read_to_string(&source).unwrap(), authored);
+
+    configure_relink_extensions(tmp.path(), &[]);
+    let explicit_empty = sid()
+        .arg("relink")
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(explicit_empty, omitted);
+    assert_eq!(fs::read_to_string(source).unwrap(), authored);
+}
+
+#[test]
+fn relink_colon_line_preview_and_write_preserve_the_exact_locator() {
+    let tmp = typed_project();
+    configure_relink_extensions(tmp.path(), &["colon-line"]);
+    let source = tmp.path().join("knowledge/colon-line.md");
+    let authored = "[task](../old/202402_sa2a7_old/CURRENT_STATE.md:33)\n";
+    fs::write(&source, authored).unwrap();
+
+    let preview = sid()
+        .arg("relink")
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let preview = json(&preview);
+    assert_eq!(preview["complete"], true);
+    assert_eq!(preview["applied"], false);
+    assert!(preview["findings"].as_array().unwrap().is_empty());
+    assert_eq!(
+        preview["changes"],
+        serde_json::json!([{
+            "path": source.canonicalize().unwrap(),
+            "line": 1,
+            "column": 8,
+            "id": "sa2a7",
+            "from": "../old/202402_sa2a7_old/CURRENT_STATE.md:33",
+            "to": "../work/202402_sa2a7_task/CURRENT_STATE.md:33"
+        }])
+    );
+    assert_eq!(fs::read_to_string(&source).unwrap(), authored);
+
+    let written = sid()
+        .args(["relink", "--write"])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let written = json(&written);
+    assert_eq!(written["complete"], true);
+    assert_eq!(written["applied"], true);
+    assert_eq!(written["changes"], preview["changes"]);
+    assert!(written["findings"].as_array().unwrap().is_empty());
+    assert_eq!(
+        fs::read_to_string(source).unwrap(),
+        "[task](../work/202402_sa2a7_task/CURRENT_STATE.md:33)\n"
+    );
+}
+
+#[test]
+fn relink_colon_line_preserves_fragments_and_skips_external_ports() {
+    let tmp = typed_project();
+    configure_relink_extensions(tmp.path(), &["colon-line"]);
+    let source = tmp.path().join("knowledge/colon-line-fragment.md");
+    fs::write(
+        &source,
+        "[fragment](../old/202402_sa2a7_old/CURRENT_STATE.md:33#part)\n\
+[first-line](../old/202402_sa2a7_old/CURRENT_STATE.md:1)\n\
+[zero](../old/202402_sa2a7_old/CURRENT_STATE.md:0)\n\
+[leading-zero](../old/202402_sa2a7_old/CURRENT_STATE.md:01)\n\
+[missing](../old/202402_sa2a7_old/missing.md:33)\n\
+[external](https://example.test:443/202402_sa2a7_old/CURRENT_STATE.md:33#part)\n",
+    )
+    .unwrap();
+
+    let output = sid()
+        .arg("relink")
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value = json(&output);
+    assert_eq!(value["complete"], true);
+    assert_eq!(
+        value["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|change| (
+                change["from"].as_str().unwrap(),
+                change["to"].as_str().unwrap()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (
+                "../old/202402_sa2a7_old/CURRENT_STATE.md:33#part",
+                "../work/202402_sa2a7_task/CURRENT_STATE.md:33#part"
+            ),
+            (
+                "../old/202402_sa2a7_old/CURRENT_STATE.md:1",
+                "../work/202402_sa2a7_task/CURRENT_STATE.md:1"
+            )
+        ]
+    );
+    assert_eq!(
+        value["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|finding| finding["code"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "relink-missing-internal-target",
+            "relink-missing-internal-target",
+            "relink-missing-internal-target"
+        ]
+    );
+    let messages = value["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|finding| finding["message"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    for literal in ["CURRENT_STATE.md:0", "CURRENT_STATE.md:01", "missing.md:33"] {
+        assert!(
+            messages.iter().any(|message| message.ends_with(literal)),
+            "missing finding for {literal}"
+        );
+    }
+}
+
+#[test]
+fn relink_colon_line_prefers_an_existing_literal_colon_filename() {
+    let tmp = typed_project();
+    configure_relink_extensions(tmp.path(), &["colon-line"]);
+    let literal = tmp
+        .path()
+        .join("work/202402_sa2a7_task/sub/CURRENT_STATE.md:33");
+    fs::create_dir_all(literal.parent().unwrap()).unwrap();
+    fs::write(&literal, "literal colon filename\n").unwrap();
+    assert!(!literal.with_file_name("CURRENT_STATE.md").exists());
+    let source = tmp.path().join("knowledge/colon-line-literal.md");
+    fs::write(
+        &source,
+        "[literal](../old/202402_sa2a7_old/sub/CURRENT_STATE.md:33)\n",
+    )
+    .unwrap();
+
+    let output = sid()
+        .arg("relink")
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value = json(&output);
+    assert!(value["findings"].as_array().unwrap().is_empty());
+    assert_eq!(
+        value["changes"][0]["to"],
+        "../work/202402_sa2a7_task/sub/CURRENT_STATE.md:33"
+    );
 }
 
 #[test]

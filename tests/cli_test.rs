@@ -1472,6 +1472,30 @@ fn typed_config_paths_validate_and_unknown_keys_fail_closed() {
 }
 
 #[test]
+fn configured_relink_destination_extensions_fail_closed_when_unknown() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join(".sid"),
+        "[relink]\ndestination_extensions = [\"line-column\"]\n",
+    )
+    .unwrap();
+
+    let output = bin_cmd()
+        .arg("relink")
+        .current_dir(tmp.path())
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("parse project config"), "{stderr}");
+    assert!(stderr.contains("unknown variant"), "{stderr}");
+    assert!(stderr.contains("line-column"), "{stderr}");
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
 fn configured_ref_deny_prefixes_fail_closed_when_invalid() {
     for prefix in ["se", "sex2a", "Sex", "si2", "sa22"] {
         let tmp = tempfile::tempdir().unwrap();

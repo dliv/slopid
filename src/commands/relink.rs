@@ -8,7 +8,7 @@ use std::io::{ErrorKind, Write};
 use std::ops::Range;
 use std::path::{Component, Path, PathBuf};
 
-use super::load_project_config;
+use super::{RelinkDestinationExtension, load_project_config};
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct RelinkChange {
@@ -193,9 +193,13 @@ fn plan_relink(config: &super::ProjectConfig) -> RelinkPlan {
         };
         let mut replacements = Vec::new();
         for destination in markdown::destinations(text) {
-            if let Some(replacement) =
-                resolve_destination(&path, destination, &index, &mut findings)
-            {
+            if let Some(replacement) = resolve_destination(
+                &path,
+                destination,
+                &index,
+                &config.relink_destination_extensions,
+                &mut findings,
+            ) {
                 replacements.push(replacement);
             }
         }
@@ -232,6 +236,7 @@ fn resolve_destination(
     source: &Path,
     destination: markdown::MarkdownDestination,
     index: &documents::DocumentIndex,
+    destination_extensions: &[RelinkDestinationExtension],
     findings: &mut Vec<Finding>,
 ) -> Option<Replacement> {
     let resolved = destination.resolved;
@@ -241,7 +246,14 @@ fn resolve_destination(
     if path_text.is_empty() || is_external(path_text) {
         return None;
     }
-    let components = path_text.split('/').collect::<Vec<_>>();
+    let colon_line = destination_extensions
+        .contains(&RelinkDestinationExtension::ColonLine)
+        .then(|| split_colon_line(path_text))
+        .flatten();
+    let (resolution_path_text, locator) = colon_line
+        .map(|(base, locator)| (base, Some(locator)))
+        .unwrap_or((path_text, None));
+    let components = resolution_path_text.split('/').collect::<Vec<_>>();
     let mut embedded = Vec::new();
     for (offset, component) in components.iter().enumerate() {
         let stem = component.strip_suffix(".md").unwrap_or(component);
@@ -301,13 +313,18 @@ fn resolve_destination(
         );
         return None;
     };
-    if !target.exists() {
+    let literal_target = locator.and_then(|locator| append_file_name_suffix(&target, locator));
+    let literal_exists = literal_target
+        .as_ref()
+        .is_some_and(|literal_target| literal_target.exists());
+    if !literal_exists && !target.exists() {
+        let missing_target = literal_target.as_ref().unwrap_or(&target);
         push_candidate_finding(
             findings,
             FindingCode::RelinkMissingInternalTarget,
             format!(
                 "preserved internal target does not exist: {}",
-                target.display()
+                missing_target.display()
             ),
             source,
             target_id,
@@ -317,6 +334,9 @@ fn resolve_destination(
     }
     let relative = relative_path(source.parent().unwrap_or_else(|| Path::new("/")), &target);
     let mut replacement_text = path_text_for_wire(&relative);
+    if let Some(locator) = locator {
+        replacement_text.push_str(locator);
+    }
     if !fragment.is_empty() {
         replacement_text.push('#');
         replacement_text.push_str(fragment);
@@ -335,6 +355,28 @@ fn resolve_destination(
             to: replacement_text,
         },
     })
+}
+
+fn split_colon_line(destination: &str) -> Option<(&str, &str)> {
+    let offset = destination.rfind(':')?;
+    let (base, locator) = destination.split_at(offset);
+    let digits = locator.strip_prefix(':')?;
+    if base.is_empty()
+        || digits.is_empty()
+        || digits.starts_with('0')
+        || !digits.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    Some((base, locator))
+}
+
+fn append_file_name_suffix(path: &Path, suffix: &str) -> Option<PathBuf> {
+    let mut file_name = path.file_name()?.to_os_string();
+    file_name.push(suffix);
+    let mut suffixed = path.to_path_buf();
+    suffixed.set_file_name(file_name);
+    Some(suffixed)
 }
 
 fn push_candidate_finding(
