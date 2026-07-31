@@ -35,6 +35,19 @@ Use `sid new --from-seed sb3b8` to move the exact seed bytes into task `napkin.m
 Use `sid relink` to preview proven Markdown destination repairs without writing.
 After reviewing `complete`, `applied`, `changes`, and `findings`, use
 `sid relink --write` to apply each still-verified source file independently.
+Use `sid relink --move sa2a7 --into .archive` to preview only the destinations one
+planned move would change: inbound links to that owner plus links authored inside
+it. The preview adds `projection` and `plan_sha256`.
+Then use `sid relink --move sa2a7 --into .archive --write --expected-plan-sha256 <plan_sha256>`
+with the digest from a fresh preview. A projected write refuses
+before touching any file when the plan changed or is incomplete, and a partial
+result requires another preview rather than a rollback. When the owner already
+sits under that root, the same command verifies its scoped links are canonical.
+Projected `complete` classifies every local destination in Slopid's authored
+source coverage, including ref-less and multi-ref paths. Generic projected
+changes use `id:null`. Excluded inbox, note, tmp, VCS, and ignored paths remain
+outside that proof boundary. Slopid only repairs Markdown destinations.
+It never moves a folder, files a task, or performs any other lifecycle step.
 The read/query commands are read-only and emit JSON by default. Inspect `complete`
 and `findings` before treating partial context as authoritative. Parse canonical
 node frontmatter instead of inferring identity or graph role from folder paths.

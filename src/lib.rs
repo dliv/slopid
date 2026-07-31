@@ -121,9 +121,20 @@ fn run(cli: Cli) -> Result<i32> {
                 &cwd,
             )?)?;
         }
-        Command::Relink { write } => {
+        Command::Relink {
+            write,
+            move_id,
+            into,
+            expected_plan_sha256,
+        } => {
             let cwd = std::env::current_dir()?;
-            output(&commands::cmd_relink(write, &cwd)?)?;
+            let inputs = commands::RelinkInputs {
+                write,
+                move_id,
+                into,
+                expected_plan_sha256,
+            };
+            output(&commands::cmd_relink(inputs, &cwd)?)?;
         }
         Command::AgentInstructions => {
             let result = commands::agent_instructions();

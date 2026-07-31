@@ -2,11 +2,18 @@ use pulldown_cmark::{Event, LinkType, Parser, Tag};
 use std::collections::BTreeSet;
 use std::ops::Range;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MarkdownDestinationForm {
+    Bare,
+    Angle,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MarkdownDestination {
     pub span: Range<usize>,
     pub original: String,
     pub resolved: String,
+    pub form: MarkdownDestinationForm,
     pub line: usize,
     pub column: usize,
 }
@@ -37,19 +44,19 @@ pub fn destinations(text: &str) -> Vec<MarkdownDestination> {
             _ => continue,
         };
         if link_type == LinkType::Inline
-            && let Some(span) = inline_span(text, range)
+            && let Some((span, form)) = inline_span(text, range)
         {
-            candidates.push((span, destination));
+            candidates.push((span, destination, form));
         }
     }
     for (range, destination) in references {
-        if let Some(span) = reference_span(text, range) {
-            candidates.push((span, destination));
+        if let Some((span, form)) = reference_span(text, range) {
+            candidates.push((span, destination, form));
         }
     }
     let mut seen = BTreeSet::new();
     let mut output = Vec::new();
-    for (span, resolved) in candidates {
+    for (span, resolved, form) in candidates {
         if !seen.insert((span.start, span.end)) {
             continue;
         }
@@ -59,6 +66,7 @@ pub fn destinations(text: &str) -> Vec<MarkdownDestination> {
             span,
             original,
             resolved,
+            form,
             line,
             column,
         });
@@ -67,19 +75,26 @@ pub fn destinations(text: &str) -> Vec<MarkdownDestination> {
     output
 }
 
-fn inline_span(text: &str, range: Range<usize>) -> Option<Range<usize>> {
+fn inline_span(text: &str, range: Range<usize>) -> Option<(Range<usize>, MarkdownDestinationForm)> {
     let slice = text.get(range.clone())?;
     let marker = slice.rfind("](")?;
     destination_after(text, range.start + marker + 2, range.end)
 }
 
-fn reference_span(text: &str, range: Range<usize>) -> Option<Range<usize>> {
+fn reference_span(
+    text: &str,
+    range: Range<usize>,
+) -> Option<(Range<usize>, MarkdownDestinationForm)> {
     let slice = text.get(range.clone())?;
     let marker = slice.find("]:")?;
     destination_after(text, range.start + marker + 2, range.end)
 }
 
-fn destination_after(text: &str, mut start: usize, limit: usize) -> Option<Range<usize>> {
+fn destination_after(
+    text: &str,
+    mut start: usize,
+    limit: usize,
+) -> Option<(Range<usize>, MarkdownDestinationForm)> {
     let bytes = text.as_bytes();
     while start < limit && bytes[start].is_ascii_whitespace() {
         start += 1;
@@ -94,7 +109,7 @@ fn destination_after(text: &str, mut start: usize, limit: usize) -> Option<Range
         while cursor < limit {
             let byte = bytes[cursor];
             if byte == b'>' && !escaped {
-                return Some(destination_start..cursor);
+                return Some((destination_start..cursor, MarkdownDestinationForm::Angle));
             }
             escaped = byte == b'\\' && !escaped;
             if byte != b'\\' {
@@ -125,7 +140,8 @@ fn destination_after(text: &str, mut start: usize, limit: usize) -> Option<Range
         }
         cursor += 1;
     }
-    (cursor > destination_start).then_some(destination_start..cursor)
+    (cursor > destination_start)
+        .then_some((destination_start..cursor, MarkdownDestinationForm::Bare))
 }
 
 fn line_column(text: &str, offset: usize) -> (usize, usize) {
@@ -157,8 +173,11 @@ mod tests {
         assert_eq!(found.len(), 3, "{found:#?}");
         assert_eq!(found[0].line, 1);
         assert_eq!(found[0].column, 9);
+        assert_eq!(found[0].form, MarkdownDestinationForm::Bare);
         assert_eq!(found[1].original, "../202402_sb3b8_seed.md");
+        assert_eq!(found[1].form, MarkdownDestinationForm::Angle);
         assert_eq!(found[2].line, 5);
+        assert_eq!(found[2].form, MarkdownDestinationForm::Bare);
     }
 
     #[test]
@@ -168,5 +187,24 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].original, "../202401_sa2a7_old/a\\(b\\).md");
         assert_eq!(found[0].resolved, "../202401_sa2a7_old/a(b).md");
+        assert_eq!(found[0].form, MarkdownDestinationForm::Bare);
+    }
+
+    #[test]
+    fn destination_forms_preserve_raw_and_decoded_representations() {
+        let markdown = "[close](close\\).md)\n\
+[angle](<a(b.md>)\n\
+[entity](a&#40;b&#41;.md)\n\
+[use][ref]\n\n\
+[ref]: <close).md>\n";
+        let found = destinations(markdown);
+        assert_eq!(found.len(), 4, "{found:#?}");
+        assert_eq!(found[0].original, "close\\).md");
+        assert_eq!(found[0].resolved, "close).md");
+        assert_eq!(found[0].form, MarkdownDestinationForm::Bare);
+        assert_eq!(found[1].form, MarkdownDestinationForm::Angle);
+        assert_eq!(found[2].original, "a&#40;b&#41;.md");
+        assert_eq!(found[2].resolved, "a(b).md");
+        assert_eq!(found[3].form, MarkdownDestinationForm::Angle);
     }
 }

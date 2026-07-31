@@ -70,6 +70,13 @@ pub enum FindingCode {
     RelinkMissingInternalTarget,
     RelinkConcurrentChange,
     RelinkWriteFailed,
+    /// A move-scoped destination matches neither the current nor the projected
+    /// canonical path, so projected relink refuses instead of normalizing it.
+    RelinkProjectionDrift,
+    /// A projected write was approved against a plan that no longer matches.
+    /// Transient: it describes the request, not the scanned corpus, so it never
+    /// contributes to the recomputed plan digest.
+    RelinkPlanChanged,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]

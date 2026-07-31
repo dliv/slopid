@@ -188,6 +188,11 @@ Missing, ambiguous, and vanished internal targets produce respectively
 `relink-missing-internal-target`; candidate findings do not make an otherwise
 complete scan partial.
 
+This contract covers global relink only. `sid relink --move <ID> --into <ROOT>`
+is a separate, narrower authority contracted in
+[0006-move-projected-relink.md](0006-move-projected-relink.md); it adds
+projected-only result keys and never changes the global behavior specified here.
+
 The result contains exactly `complete`, `applied`, `changes`, and `findings`.
 Each change contains exactly absolute source `path`, one-based destination
 `line`/Unicode-scalar `column`, canonical target `id`, original `from`, and

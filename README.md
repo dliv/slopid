@@ -85,6 +85,38 @@ Read/query commands emit JSON by default. `sid list --human` is an explicitly
 non-contractual display mode for direct use. Mutations expose dry-run or preview
 paths where applicable; `sid relink` does not write unless passed `--write`.
 
+### Move-projected relink
+
+`sid relink` repairs every destination it can prove. To instead repair only what
+one planned lifecycle move would change, scope it to a stable id and a configured
+destination root:
+
+```bash
+sid relink --move sa2a7 --into .archive
+sid relink --move sa2a7 --into .archive \
+  --write --expected-plan-sha256 <plan_sha256-from-the-preview>
+```
+
+The preview reports the projected `from_owner`/`to_owner`, the scoped changes, and
+a `plan_sha256` bound to the move's effect set: inbound links to the moving owner
+plus links authored inside it whose source directory moves. Writing requires that
+exact digest from a *fresh* preview and refuses before touching any file if the
+plan changed or is incomplete. A partial write is forward-recoverable rather than
+rolled back, so take another preview and apply the remainder. If the owner already
+sits under the destination root, the same command verifies that its scoped links
+are canonical instead of planning a move.
+
+`complete:true` means every local destination in Slopid's declared authored
+source coverage was classified and this scoped plan is safe to apply. That
+includes ref-less and multi-ref local paths; projected generic changes report
+`id:null` rather than inventing target identity. It is not proof over excluded
+sources such as task `inbox`, notes, `tmp`, VCS metadata, or ignored paths. See
+[contract 0006](docs/contracts/0006-move-projected-relink.md) for the exact
+effect set, digest authority, and refusal rules.
+
+Slopid only repairs Markdown destinations. It does not move folders, file tasks,
+or run any other part of a lifecycle operation.
+
 ## AI Agent Integration
 
 Run `sid agent-instructions` for the full machine-readable usage guide.

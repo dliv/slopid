@@ -130,10 +130,39 @@ pub enum Command {
     },
 
     /// Preview or apply safe Markdown destination repairs as JSON
+    #[command(after_help = "Global relink repairs every resolvable destination.\n\
+Projected relink instead scopes repairs to the destinations that one planned\n\
+lifecycle move would change:\n\
+  sid relink --move sa2a7 --into .archive\n\
+  sid relink --move sa2a7 --into .archive --write --expected-plan-sha256 <SHA256>\n\
+Both forms preview by default. A projected write requires the exact digest from\n\
+a fresh preview and refuses before touching any file when the plan changed or\n\
+is incomplete; a partial result requires another preview. Projected complete\n\
+classifies every local destination in Slopid's authored-source coverage, not\n\
+excluded inbox, note, tmp, VCS, or ignored paths.")]
     Relink {
         /// Apply independently verified per-file repairs; default is preview
         #[arg(long)]
         write: bool,
+
+        /// Scope repairs to one exact task/review id that is about to move
+        #[arg(long = "move", value_name = "ID", requires = "into")]
+        move_id: Option<String>,
+
+        /// Configured task root the moving owner is projected into,
+        /// e.g. --into .archive or --into stm/.archive-prs
+        #[arg(long, value_name = "ROOT", requires = "move_id")]
+        into: Option<String>,
+
+        /// Exact `plan_sha256` from a fresh projected preview; required to
+        /// write a projected move
+        #[arg(
+            long,
+            value_name = "SHA256",
+            requires_all = ["write", "move_id"],
+            value_parser = parse_sha256
+        )]
+        expected_plan_sha256: Option<String>,
     },
 
     /// Print AI agent usage instructions
@@ -141,6 +170,21 @@ pub enum Command {
 
     /// Write the default project config to .sid
     Init,
+}
+
+/// A plan digest is exactly the wire form `plan_sha256` emits: 64 lowercase
+/// ASCII hexadecimal characters. Anything else is an argument error, so an
+/// approval can never be silently truncated or case-folded into a match.
+fn parse_sha256(value: &str) -> Result<String, String> {
+    if value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        Ok(value.to_string())
+    } else {
+        Err("value must be exactly 64 lowercase hexadecimal characters".to_string())
+    }
 }
 
 fn parse_positive_usize(value: &str) -> Result<usize, String> {

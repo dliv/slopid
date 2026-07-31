@@ -10,12 +10,14 @@ use std::path::{Component, Path, PathBuf};
 
 use super::{RelinkDestinationExtension, load_project_config};
 
+mod projected;
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct RelinkChange {
     pub path: PathBuf,
     pub line: usize,
     pub column: usize,
-    pub id: String,
+    pub id: Option<String>,
     pub from: String,
     pub to: String,
 }
@@ -41,17 +43,64 @@ struct RelinkPlan {
     usable: bool,
 }
 
+/// One exact owner move, projected but not yet performed. Present only on
+/// projected results; `settled` means the owner already lives at `to_owner`,
+/// so the command verifies scoped destinations instead of planning a move.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct RelinkProjection {
+    pub id: String,
+    pub from_owner: PathBuf,
+    pub to_owner: PathBuf,
+    pub settled: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub struct RelinkResult {
     pub complete: bool,
     pub applied: bool,
     pub changes: Vec<RelinkChange>,
     pub findings: Vec<Finding>,
+
+    // Projected-only fields. Global relink leaves both `None` so its wire
+    // contract stays exactly `complete`, `applied`, `changes`, `findings`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub projection: Option<RelinkProjection>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_sha256: Option<String>,
 }
 
-pub fn cmd_relink(write: bool, cwd: &Path) -> Result<RelinkResult> {
+pub struct RelinkInputs {
+    pub write: bool,
+    pub move_id: Option<String>,
+    pub into: Option<String>,
+    pub expected_plan_sha256: Option<String>,
+}
+
+pub fn cmd_relink(inputs: RelinkInputs, cwd: &Path) -> Result<RelinkResult> {
     let config = load_project_config(cwd)?;
-    let plan = plan_relink(&config);
+    // The CLI layer already enforces these relationships; the library API
+    // repeats them so a future caller cannot request an unscoped digest.
+    match (inputs.move_id.as_deref(), inputs.into.as_deref()) {
+        (Some(move_id), Some(into)) => projected::cmd_relink_move(
+            &config,
+            move_id,
+            into,
+            inputs.write,
+            inputs.expected_plan_sha256.as_deref(),
+        ),
+        (None, None) => {
+            if inputs.expected_plan_sha256.is_some() {
+                bail!("--expected-plan-sha256 requires --move and --into");
+            }
+            cmd_relink_global(&config, inputs.write)
+        }
+        _ => bail!("--move and --into must be supplied together"),
+    }
+}
+
+fn cmd_relink_global(config: &super::ProjectConfig, write: bool) -> Result<RelinkResult> {
+    let plan = plan_relink(config);
     if !plan.usable {
         bail!("relink could not obtain any usable authored Markdown source");
     }
@@ -73,12 +122,102 @@ pub fn cmd_relink(write: bool, cwd: &Path) -> Result<RelinkResult> {
             applied: false,
             changes,
             findings: plan.findings,
+            projection: None,
+            plan_sha256: None,
         })
     }
 }
 
+/// Authored Markdown that relink is allowed to read, plus the coverage state of
+/// collecting it. Global and projected planning share this so neither can scan a
+/// different corpus than the other.
+struct SourceScan {
+    paths: Vec<PathBuf>,
+    findings: Vec<Finding>,
+    complete: bool,
+    usable: bool,
+}
+
 fn plan_relink(config: &super::ProjectConfig) -> RelinkPlan {
     let index = documents::scan_sources(&config.document_sources());
+    let scan = scan_relink_sources(config, &index);
+    let mut findings = scan.findings;
+    let mut complete = scan.complete;
+
+    let mut files = Vec::new();
+    for path in scan.paths {
+        let scanned = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                complete = false;
+                findings.push(Finding::error(
+                    FindingCode::UnreadableEntry,
+                    format!("cannot read authored Markdown for relink: {err}"),
+                    Some(path),
+                ));
+                continue;
+            }
+        };
+        let text = match std::str::from_utf8(&scanned) {
+            Ok(text) => text,
+            Err(err) => {
+                complete = false;
+                findings.push(Finding::error(
+                    FindingCode::UnreadableEntry,
+                    format!("authored Markdown is not UTF-8: {err}"),
+                    Some(path),
+                ));
+                continue;
+            }
+        };
+        let mut replacements = Vec::new();
+        for destination in markdown::destinations(text) {
+            if let Some(replacement) = resolve_destination(
+                &path,
+                destination,
+                &index,
+                &config.relink_destination_extensions,
+                &mut findings,
+            ) {
+                replacements.push(replacement);
+            }
+        }
+        replacements.sort_by_key(|replacement| replacement.span.start);
+        if has_overlapping_spans(&replacements) {
+            complete = false;
+            findings.push(Finding::error(
+                FindingCode::UnreadableEntry,
+                "overlapping Markdown destination spans cannot be safely planned",
+                Some(path.clone()),
+            ));
+            replacements.clear();
+        }
+        files.push(PlannedFile {
+            path,
+            scanned,
+            replacements,
+        });
+    }
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    findings.sort_by(compare_findings);
+    RelinkPlan {
+        files,
+        findings,
+        complete,
+        usable: scan.usable,
+    }
+}
+
+fn has_overlapping_spans(replacements: &[Replacement]) -> bool {
+    replacements
+        .windows(2)
+        .any(|window| window[0].span.end > window[1].span.start)
+}
+
+fn scan_relink_sources(
+    config: &super::ProjectConfig,
+    index: &documents::DocumentIndex,
+) -> SourceScan {
     let mut findings = index
         .findings
         .iter()
@@ -165,84 +304,29 @@ fn plan_relink(config: &super::ProjectConfig) -> RelinkPlan {
         }
     }
 
-    let mut files = Vec::new();
-    for path in paths {
-        let scanned = match fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(err) => {
-                complete = false;
-                findings.push(Finding::error(
-                    FindingCode::UnreadableEntry,
-                    format!("cannot read authored Markdown for relink: {err}"),
-                    Some(path),
-                ));
-                continue;
-            }
-        };
-        let text = match std::str::from_utf8(&scanned) {
-            Ok(text) => text,
-            Err(err) => {
-                complete = false;
-                findings.push(Finding::error(
-                    FindingCode::UnreadableEntry,
-                    format!("authored Markdown is not UTF-8: {err}"),
-                    Some(path),
-                ));
-                continue;
-            }
-        };
-        let mut replacements = Vec::new();
-        for destination in markdown::destinations(text) {
-            if let Some(replacement) = resolve_destination(
-                &path,
-                destination,
-                &index,
-                &config.relink_destination_extensions,
-                &mut findings,
-            ) {
-                replacements.push(replacement);
-            }
-        }
-        replacements.sort_by_key(|replacement| replacement.span.start);
-        if replacements
-            .windows(2)
-            .any(|window| window[0].span.end > window[1].span.start)
-        {
-            complete = false;
-            findings.push(Finding::error(
-                FindingCode::UnreadableEntry,
-                "overlapping Markdown destination spans cannot be safely planned",
-                Some(path.clone()),
-            ));
-            replacements.clear();
-        }
-        files.push(PlannedFile {
-            path,
-            scanned,
-            replacements,
-        });
-    }
-    files.sort_by(|left, right| left.path.cmp(&right.path));
-    findings.sort_by(compare_findings);
-    RelinkPlan {
-        files,
+    SourceScan {
+        paths: paths.into_iter().collect(),
         findings,
         complete,
         usable,
     }
 }
 
-fn resolve_destination(
-    source: &Path,
-    destination: markdown::MarkdownDestination,
-    index: &documents::DocumentIndex,
+/// The stronger identity-backed interpretation of a local destination: exactly
+/// one embedded canonical ref, with suffix and locator semantics preserved.
+struct LocalDestination<'a> {
+    resolution_path_text: &'a str,
+    locator: Option<&'a str>,
+    fragment: &'a str,
+}
+
+fn parse_local_destination<'a>(
+    resolved: &'a str,
     destination_extensions: &[RelinkDestinationExtension],
-    findings: &mut Vec<Finding>,
-) -> Option<Replacement> {
-    let resolved = destination.resolved;
+) -> Option<LocalDestination<'a>> {
     let (path_text, fragment) = resolved
         .split_once('#')
-        .map_or((resolved.as_str(), ""), |(path, fragment)| (path, fragment));
+        .map_or((resolved, ""), |(path, fragment)| (path, fragment));
     if path_text.is_empty() || is_external(path_text) {
         return None;
     }
@@ -253,7 +337,32 @@ fn resolve_destination(
     let (resolution_path_text, locator) = colon_line
         .map(|(base, locator)| (base, Some(locator)))
         .unwrap_or((path_text, None));
-    let components = resolution_path_text.split('/').collect::<Vec<_>>();
+    Some(LocalDestination {
+        resolution_path_text,
+        locator,
+        fragment,
+    })
+}
+
+struct DestinationRef<'a> {
+    fragment: &'a str,
+    locator: Option<&'a str>,
+    target_id: String,
+    suffix: Vec<&'a str>,
+    seed_destination: bool,
+    /// The authored path exactly as it resolves on disk: fragment and any
+    /// `colon-line` locator removed, escapes already decoded. Projection needs
+    /// this because where the *authored bytes* point can differ from where the
+    /// canonical text points.
+    resolution_path_text: &'a str,
+}
+
+fn parse_destination_ref<'a>(
+    resolved: &'a str,
+    destination_extensions: &[RelinkDestinationExtension],
+) -> Option<DestinationRef<'a>> {
+    let local = parse_local_destination(resolved, destination_extensions)?;
+    let components = local.resolution_path_text.split('/').collect::<Vec<_>>();
     let mut embedded = Vec::new();
     for (offset, component) in components.iter().enumerate() {
         let stem = component.strip_suffix(".md").unwrap_or(component);
@@ -270,55 +379,172 @@ fn resolve_destination(
     let [(component_index, target_id, seed_destination)] = embedded.as_slice() else {
         return None;
     };
-    let Some(record) = index.nodes.get(target_id) else {
-        let ambiguous = index.findings.iter().any(|finding| {
-            finding.code == FindingCode::DuplicateId
-                && finding.id.as_deref() == Some(target_id.as_str())
-        });
-        push_candidate_finding(
-            findings,
-            if ambiguous {
-                FindingCode::RelinkAmbiguousRef
-            } else {
-                FindingCode::RelinkUnresolvedRef
-            },
-            if ambiguous {
-                format!("embedded ref {target_id} resolves ambiguously")
-            } else {
-                format!("embedded ref {target_id} does not resolve")
-            },
-            source,
-            target_id,
-            destination.line,
-        );
-        return None;
-    };
-    let suffix = &components[component_index + 1..];
-    let target = if *seed_destination || suffix.is_empty() || suffix == ["CURRENT_STATE.md"] {
-        record.node.path.clone()
+    Some(DestinationRef {
+        fragment: local.fragment,
+        locator: local.locator,
+        target_id: target_id.clone(),
+        suffix: components[component_index + 1..].to_vec(),
+        seed_destination: *seed_destination,
+        resolution_path_text: local.resolution_path_text,
+    })
+}
+
+enum TargetResolution {
+    Resolved(PathBuf),
+    /// A file-backed record (seed or topic) cannot carry an internal suffix.
+    FileBackedSuffix,
+}
+
+fn resolve_target_path(
+    record: &documents::DocumentRecord,
+    suffix: &[&str],
+    seed_destination: bool,
+) -> TargetResolution {
+    if seed_destination || suffix.is_empty() || suffix == ["CURRENT_STATE.md"] {
+        TargetResolution::Resolved(record.node.path.clone())
     } else if record.source_kind == CanonicalSourceKind::TaskOwner {
         let mut target = record.owner_path.clone();
         for component in suffix {
             target.push(component);
         }
-        target
+        TargetResolution::Resolved(target)
     } else {
+        TargetResolution::FileBackedSuffix
+    }
+}
+
+/// The path a caller should report as missing, or `None` when the current target
+/// exists. A `colon-line` locator may name a literal file, so either spelling
+/// existing is enough.
+fn missing_target_path(target: &Path, locator: Option<&str>) -> Option<PathBuf> {
+    let literal_target = locator.and_then(|locator| append_file_name_suffix(target, locator));
+    let literal_exists = literal_target
+        .as_ref()
+        .is_some_and(|literal_target| literal_target.exists());
+    if literal_exists || target.exists() {
+        None
+    } else {
+        Some(literal_target.unwrap_or_else(|| target.to_path_buf()))
+    }
+}
+
+fn canonical_destination_text(
+    source_parent: &Path,
+    target: &Path,
+    locator: Option<&str>,
+    fragment: &str,
+) -> String {
+    let relative = relative_path(source_parent, target);
+    let mut text = path_text_for_wire(&relative);
+    if let Some(locator) = locator {
+        text.push_str(locator);
+    }
+    if !fragment.is_empty() {
+        text.push('#');
+        text.push_str(fragment);
+    }
+    text
+}
+
+fn render_destination_text(semantic: &str, form: markdown::MarkdownDestinationForm) -> String {
+    match form {
+        markdown::MarkdownDestinationForm::Bare => {
+            let mut stack = Vec::new();
+            let mut matched = BTreeSet::new();
+            for (offset, ch) in semantic.char_indices() {
+                match ch {
+                    '(' => stack.push(offset),
+                    ')' => {
+                        if let Some(open) = stack.pop() {
+                            matched.insert(open);
+                            matched.insert(offset);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let mut rendered = String::with_capacity(semantic.len());
+            for (offset, ch) in semantic.char_indices() {
+                if ch == '\\' || (matches!(ch, '(' | ')') && !matched.contains(&offset)) {
+                    rendered.push('\\');
+                }
+                rendered.push(ch);
+            }
+            rendered
+        }
+        markdown::MarkdownDestinationForm::Angle => {
+            let mut rendered = String::with_capacity(semantic.len());
+            for ch in semantic.chars() {
+                if matches!(ch, '\\' | '<' | '>') {
+                    rendered.push('\\');
+                }
+                rendered.push(ch);
+            }
+            rendered
+        }
+    }
+}
+
+fn source_parent_of(source: &Path) -> &Path {
+    source.parent().unwrap_or_else(|| Path::new("/"))
+}
+
+fn unresolved_ref_finding_code(index: &documents::DocumentIndex, target_id: &str) -> FindingCode {
+    let ambiguous = index.findings.iter().any(|finding| {
+        finding.code == FindingCode::DuplicateId && finding.id.as_deref() == Some(target_id)
+    });
+    if ambiguous {
+        FindingCode::RelinkAmbiguousRef
+    } else {
+        FindingCode::RelinkUnresolvedRef
+    }
+}
+
+fn unresolved_ref_message(code: FindingCode, target_id: &str) -> String {
+    if code == FindingCode::RelinkAmbiguousRef {
+        format!("embedded ref {target_id} resolves ambiguously")
+    } else {
+        format!("embedded ref {target_id} does not resolve")
+    }
+}
+
+fn resolve_destination(
+    source: &Path,
+    destination: markdown::MarkdownDestination,
+    index: &documents::DocumentIndex,
+    destination_extensions: &[RelinkDestinationExtension],
+    findings: &mut Vec<Finding>,
+) -> Option<Replacement> {
+    let resolved = destination.resolved;
+    let parsed = parse_destination_ref(&resolved, destination_extensions)?;
+    let target_id = parsed.target_id;
+    let Some(record) = index.nodes.get(&target_id) else {
+        let code = unresolved_ref_finding_code(index, &target_id);
         push_candidate_finding(
             findings,
-            FindingCode::RelinkMissingInternalTarget,
-            format!("file-backed target {target_id} cannot preserve an internal suffix"),
+            code,
+            unresolved_ref_message(code, &target_id),
             source,
-            target_id,
+            &target_id,
             destination.line,
         );
         return None;
     };
-    let literal_target = locator.and_then(|locator| append_file_name_suffix(&target, locator));
-    let literal_exists = literal_target
-        .as_ref()
-        .is_some_and(|literal_target| literal_target.exists());
-    if !literal_exists && !target.exists() {
-        let missing_target = literal_target.as_ref().unwrap_or(&target);
+    let target = match resolve_target_path(record, &parsed.suffix, parsed.seed_destination) {
+        TargetResolution::Resolved(target) => target,
+        TargetResolution::FileBackedSuffix => {
+            push_candidate_finding(
+                findings,
+                FindingCode::RelinkMissingInternalTarget,
+                format!("file-backed target {target_id} cannot preserve an internal suffix"),
+                source,
+                &target_id,
+                destination.line,
+            );
+            return None;
+        }
+    };
+    if let Some(missing_target) = missing_target_path(&target, parsed.locator) {
         push_candidate_finding(
             findings,
             FindingCode::RelinkMissingInternalTarget,
@@ -327,21 +553,19 @@ fn resolve_destination(
                 missing_target.display()
             ),
             source,
-            target_id,
+            &target_id,
             destination.line,
         );
         return None;
     }
-    let relative = relative_path(source.parent().unwrap_or_else(|| Path::new("/")), &target);
-    let mut replacement_text = path_text_for_wire(&relative);
-    if let Some(locator) = locator {
-        replacement_text.push_str(locator);
-    }
-    if !fragment.is_empty() {
-        replacement_text.push('#');
-        replacement_text.push_str(fragment);
-    }
-    if destination.original == replacement_text {
+    let canonical = canonical_destination_text(
+        source_parent_of(source),
+        &target,
+        parsed.locator,
+        parsed.fragment,
+    );
+    let replacement_text = render_destination_text(&canonical, destination.form);
+    if resolved == canonical && destination.original == replacement_text {
         return None;
     }
     Some(Replacement {
@@ -350,7 +574,7 @@ fn resolve_destination(
             path: source.to_path_buf(),
             line: destination.line,
             column: destination.column,
-            id: target_id.clone(),
+            id: Some(target_id),
             from: destination.original,
             to: replacement_text,
         },
@@ -531,6 +755,8 @@ where
         applied: true,
         changes,
         findings,
+        projection: None,
+        plan_sha256: None,
     }
 }
 
@@ -567,7 +793,7 @@ mod tests {
                 path: path.to_path_buf(),
                 line: 1,
                 column: 1,
-                id: "sa2a7".into(),
+                id: Some("sa2a7".into()),
                 from: from.into(),
                 to: to.into(),
             },
@@ -653,6 +879,47 @@ mod tests {
                 .findings
                 .iter()
                 .any(|finding| { finding.code == FindingCode::RelinkWriteFailed })
+        );
+    }
+
+    #[test]
+    fn overlap_detection_accepts_adjacent_spans_and_rejects_one_shared_byte() {
+        let path = Path::new("/a.md");
+        let span = |start: usize, end: usize| Replacement {
+            span: start..end,
+            change: RelinkChange {
+                path: path.to_path_buf(),
+                line: 1,
+                column: 1,
+                id: Some("sa2a7".into()),
+                from: "x".into(),
+                to: "y".into(),
+            },
+        };
+
+        assert!(!has_overlapping_spans(&[]));
+        assert!(!has_overlapping_spans(&[span(0, 5)]));
+        // Touching but disjoint: `end` is exclusive, so 5 abutting 5 is legal and
+        // must stay plannable.
+        assert!(!has_overlapping_spans(&[span(0, 5), span(5, 9)]));
+        // One shared byte is the first illegal case.
+        assert!(has_overlapping_spans(&[span(0, 6), span(5, 9)]));
+        // Detection is pairwise over sorted neighbours, so a later overlap counts.
+        assert!(has_overlapping_spans(&[span(0, 2), span(4, 8), span(7, 9)]));
+    }
+
+    #[test]
+    fn destination_renderer_escapes_only_form_sensitive_content() {
+        use markdown::MarkdownDestinationForm::{Angle, Bare};
+
+        assert_eq!(render_destination_text("a(b).md", Bare), "a(b).md");
+        assert_eq!(render_destination_text("close).md", Bare), "close\\).md");
+        assert_eq!(render_destination_text("a(b.md", Bare), "a\\(b.md");
+        assert_eq!(render_destination_text("a\\b.md", Bare), "a\\\\b.md");
+        assert_eq!(render_destination_text("a(b).md", Angle), "a(b).md");
+        assert_eq!(
+            render_destination_text("a\\b<c>.md", Angle),
+            "a\\\\b\\<c\\>.md"
         );
     }
 
