@@ -1472,6 +1472,62 @@ fn typed_config_paths_validate_and_unknown_keys_fail_closed() {
 }
 
 #[test]
+fn typed_config_rejects_identical_seed_and_note_roots() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join(".sid"),
+        "[task]\nroot = \"tasks\"\nscan_roots = []\n[seed]\nroot = \"shared\"\n[note]\nroot = \"shared\"\n",
+    )
+    .unwrap();
+
+    let output = bin_cmd()
+        .args(["search", "needle"])
+        .current_dir(tmp.path())
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("seed and note roots must resolve to distinct directories"),
+        "{stderr}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn typed_config_rejects_seed_and_note_symlink_aliases() {
+    use std::os::unix::fs::symlink;
+
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(tmp.path().join("shared")).unwrap();
+    symlink(tmp.path().join("shared"), tmp.path().join("seed-link")).unwrap();
+    symlink(tmp.path().join("shared"), tmp.path().join("note-link")).unwrap();
+    std::fs::write(
+        tmp.path().join(".sid"),
+        "[task]\nroot = \"tasks\"\nscan_roots = []\n[seed]\nroot = \"seed-link\"\n[note]\nroot = \"note-link\"\n",
+    )
+    .unwrap();
+
+    let output = bin_cmd()
+        .arg("captures")
+        .current_dir(tmp.path())
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("seed and note roots must resolve to distinct directories"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn configured_relink_destination_extensions_fail_closed_when_unknown() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(

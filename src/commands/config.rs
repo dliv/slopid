@@ -174,6 +174,7 @@ pub fn load_project_config(cwd: &Path) -> Result<ProjectConfig> {
 
     let seed_root = base.join(seed_root);
     let note_root = base.join(note_root);
+    validate_distinct_seed_and_note_roots(&seed_root, &note_root)?;
 
     Ok(ProjectConfig {
         base,
@@ -271,6 +272,17 @@ fn validate_relative_path(path: &Path) -> Result<()> {
         );
     }
 
+    Ok(())
+}
+
+fn validate_distinct_seed_and_note_roots(seed_root: &Path, note_root: &Path) -> Result<()> {
+    let same_existing_directory = match (fs::canonicalize(seed_root), fs::canonicalize(note_root)) {
+        (Ok(seed_root), Ok(note_root)) => seed_root == note_root,
+        _ => false,
+    };
+    if seed_root == note_root || same_existing_directory {
+        bail!("seed and note roots must resolve to distinct directories");
+    }
     Ok(())
 }
 
