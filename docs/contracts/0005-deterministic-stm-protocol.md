@@ -102,9 +102,10 @@ Notes contain exactly absolute `path`, UTC RFC3339 second-precision `modified`,
 and `bytes`, sorted newest mtime then path; content is never returned. Seeds
 are canonical nodes sorted newest timestamp then id/path. Missing roots are
 complete and empty. Unreadable notes or malformed seeds make the usable result
-partial. Direct `log.md` beneath the note root is reserved for the filing
-ledger and is excluded from both capture inventory and literal search; it is
-not a pending capture.
+partial. Direct dot-prefixed files beneath the note root are metadata, not
+pending captures, and are excluded from both capture inventory and literal
+search. Direct `log.md` is likewise reserved for the filing ledger and
+excluded from both commands.
 
 The default stale threshold is seven UTC calendar days; zero disables stale
 warnings. Age six is clear and age seven warns. `stale-inbox-message` and

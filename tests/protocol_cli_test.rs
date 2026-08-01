@@ -405,6 +405,65 @@ fn captures_returns_metadata_only_and_newest_first() {
 }
 
 #[test]
+fn hidden_note_root_metadata_is_not_a_capture_or_search_result() {
+    let tmp = typed_project();
+    let note_root = tmp.path().join("scratch/notes");
+    fs::create_dir_all(&note_root).unwrap();
+    fs::write(note_root.join("visible.txt"), "metadataonlyneedle").unwrap();
+    fs::write(note_root.join(".gitkeep"), "").unwrap();
+    let hidden = note_root.join(".control");
+    fs::write(&hidden, "metadataonlyneedle").unwrap();
+    let hidden_file = fs::OpenOptions::new().write(true).open(&hidden).unwrap();
+    hidden_file
+        .set_times(fs::FileTimes::new().set_modified(SystemTime::UNIX_EPOCH))
+        .unwrap();
+
+    let captures = sid()
+        .arg("captures")
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let captures = json(&captures);
+    assert_eq!(captures["notes"].as_array().unwrap().len(), 1);
+    assert!(
+        captures["notes"][0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("visible.txt")
+    );
+
+    let search = sid()
+        .args(["search", "metadataonlyneedle"])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let search = json(&search);
+    assert_eq!(search["total"], 1);
+    assert!(
+        search["results"][0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("visible.txt")
+    );
+
+    let lint = sid()
+        .arg("lint")
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(json(&lint)["findings"], serde_json::json!([]));
+}
+
+#[test]
 fn context_embeds_graph_and_pending_inbox_envelopes_without_bodies() {
     let tmp = typed_project();
     let inbox = tmp.path().join("work/202402_sa2a7_task/inbox");
