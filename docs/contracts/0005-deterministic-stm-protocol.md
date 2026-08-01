@@ -35,9 +35,10 @@ When omitted, seed and note roots are `.seeds` and `.notes` beneath the
 effective task root; topics are never implicit. All configured paths are
 project-relative and reject absolute, parent, empty, current-directory, and
 unknown settings. Seed and note roots must be distinct configured paths and,
-when both exist, must not resolve to the same physical directory through
-symlink aliases. Missing typed roots are successful empty sources. Existing
-task-only configs remain valid.
+when both exist, must not identify the same filesystem directory. A missing
+root proves no current physical alias and remains a successful empty source;
+other root-identity errors fail configuration. Existing task-only configs
+remain valid.
 
 An optional `[ref].deny_prefixes` array is an exact replacement for the
 built-in `prude` policy. Omitting it uses `prude`; setting it to `[]` allows

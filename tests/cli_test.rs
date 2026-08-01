@@ -1527,6 +1527,42 @@ fn typed_config_rejects_seed_and_note_symlink_aliases() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn typed_config_rejects_case_aliases_on_case_insensitive_filesystems() {
+    use std::os::unix::fs::MetadataExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(tmp.path().join("shared")).unwrap();
+    let lower = std::fs::metadata(tmp.path().join("shared")).unwrap();
+    let Ok(upper) = std::fs::metadata(tmp.path().join("SHARED")) else {
+        return;
+    };
+    if (lower.dev(), lower.ino()) != (upper.dev(), upper.ino()) {
+        return;
+    }
+    std::fs::write(
+        tmp.path().join(".sid"),
+        "[task]\nroot = \"tasks\"\nscan_roots = []\n[seed]\nroot = \"shared\"\n[note]\nroot = \"SHARED\"\n",
+    )
+    .unwrap();
+
+    let output = bin_cmd()
+        .arg("captures")
+        .current_dir(tmp.path())
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("seed and note roots must resolve to distinct directories"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn configured_relink_destination_extensions_fail_closed_when_unknown() {
     let tmp = tempfile::tempdir().unwrap();
