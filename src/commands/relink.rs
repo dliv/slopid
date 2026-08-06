@@ -25,6 +25,10 @@ pub struct RelinkChange {
 #[derive(Clone, Debug)]
 struct Replacement {
     span: Range<usize>,
+    /// The decoded destination the spliced bytes must reparse to, in the file
+    /// rather than in isolation. Kept beside the rendered `change.to` so
+    /// whole-file verification can state what it expects.
+    semantic: String,
     change: RelinkChange,
 }
 
@@ -170,16 +174,47 @@ fn plan_relink(config: &super::ProjectConfig) -> RelinkPlan {
                 continue;
             }
         };
+        let scan = markdown::destinations(text);
         let mut replacements = Vec::new();
-        for destination in markdown::destinations(text) {
-            if let Some(replacement) = resolve_destination(
+        // Global repair's authority is exactly the identity-backed candidate
+        // boundary: a destination carrying one recognized ref. An unlocatable
+        // destination inside that boundary is a coverage failure, while a
+        // ref-less or multi-ref one stays outside global repair just as it does
+        // when it *is* located.
+        for issue in &scan.issues {
+            if parse_destination_ref(&issue.resolved, &config.relink_destination_extensions)
+                .is_none()
+            {
+                continue;
+            }
+            complete = false;
+            let mut finding = Finding::error(
+                FindingCode::UnreadableEntry,
+                format!(
+                    "cannot locate the replaceable bytes of a repairable destination: {}",
+                    issue.message
+                ),
+                Some(path.clone()),
+            );
+            // The line is the construct's, because an unlocatable destination has
+            // no span of its own to report.
+            finding.line = Some(issue.line);
+            finding.id =
+                parse_destination_ref(&issue.resolved, &config.relink_destination_extensions)
+                    .map(|parsed| parsed.target_id);
+            findings.push(finding);
+        }
+        for destination in scan.destinations.iter().cloned() {
+            match resolve_destination(
                 &path,
                 destination,
                 &index,
                 &config.relink_destination_extensions,
                 &mut findings,
             ) {
-                replacements.push(replacement);
+                GlobalOutcome::Skip => {}
+                GlobalOutcome::Blocked => complete = false,
+                GlobalOutcome::Planned(replacement) => replacements.push(replacement),
             }
         }
         replacements.sort_by_key(|replacement| replacement.span.start);
@@ -188,6 +223,17 @@ fn plan_relink(config: &super::ProjectConfig) -> RelinkPlan {
             findings.push(Finding::error(
                 FindingCode::UnreadableEntry,
                 "overlapping Markdown destination spans cannot be safely planned",
+                Some(path.clone()),
+            ));
+            replacements.clear();
+        }
+        if !replacements.is_empty()
+            && !splice_preserves_destinations(&scanned, &scan, &replacements)
+        {
+            complete = false;
+            findings.push(Finding::error(
+                FindingCode::UnreadableEntry,
+                "planned replacements would change how this file parses, so no repair here is safe",
                 Some(path.clone()),
             ));
             replacements.clear();
@@ -212,6 +258,140 @@ fn has_overlapping_spans(replacements: &[Replacement]) -> bool {
     replacements
         .windows(2)
         .any(|window| window[0].span.end > window[1].span.start)
+}
+
+/// Apply a file's planned replacements to its scanned bytes, back to front so
+/// earlier spans keep their offsets.
+///
+/// Planning and apply share this so the bytes a plan is verified against are
+/// exactly the bytes that would be written.
+fn spliced(scanned: &[u8], replacements: &[Replacement]) -> Vec<u8> {
+    // Back-to-front splicing is only correct for disjoint spans. An overlapping
+    // set corrupts silently when the replacements grow and, when they shrink,
+    // panics — inside this assertion in a debug build, or inside `Vec::splice`
+    // itself once assertions are compiled out. Callers must therefore reject
+    // overlap first. Every path into this function does, and
+    // `splice_preserves_destinations` enforces it independently of caller
+    // ordering.
+    debug_assert!(
+        !has_overlapping_spans(replacements),
+        "spliced requires disjoint spans"
+    );
+    let mut updated = scanned.to_vec();
+    for replacement in replacements.iter().rev() {
+        updated.splice(
+            replacement.span.clone(),
+            replacement.change.to.as_bytes().iter().copied(),
+        );
+    }
+    updated
+}
+
+/// Prove the whole file still parses the way the plan assumed.
+///
+/// Per-replacement round-trip proof shows only that the emitted bytes decode
+/// correctly *in isolation*. It cannot see that those bytes changed how
+/// surrounding markup parses. A parenthesis this renderer legitimately emits can
+/// balance an earlier malformed construct and make it swallow the very link the
+/// plan meant to repair, leaving a different destination behind while every
+/// local check passed.
+///
+/// So re-scan the spliced result and require it to hold exactly the destinations
+/// the plan intended: same count, same order, every replaced one at its new
+/// semantic value, every untouched one unchanged, and no new scan uncertainty.
+fn splice_preserves_destinations(
+    scanned: &[u8],
+    before: &markdown::MarkdownDestinationScan,
+    replacements: &[Replacement],
+) -> bool {
+    // Refuse an overlapping set here rather than trusting each caller to guard
+    // before calling. Splicing overlapping spans corrupts or panics, so making
+    // this function total removes the ordering dependency between the two
+    // planners instead of documenting it.
+    if has_overlapping_spans(replacements) {
+        return false;
+    }
+    let updated = spliced(scanned, replacements);
+    let Ok(text) = std::str::from_utf8(&updated) else {
+        return false;
+    };
+    let after = markdown::destinations(text);
+    if after.issues.len() != before.issues.len()
+        || after.destinations.len() != before.destinations.len()
+    {
+        return false;
+    }
+    before
+        .destinations
+        .iter()
+        .map(|destination| {
+            replacements
+                .iter()
+                .find(|replacement| replacement.span == destination.span)
+                .map_or(destination.resolved.as_str(), |replacement| {
+                    replacement.semantic.as_str()
+                })
+        })
+        .zip(&after.destinations)
+        .all(|(expected, actual)| actual.resolved == expected)
+}
+
+/// What inspecting a preserved internal target established.
+///
+/// `Unknown` exists because `Path::exists()` collapses a permission failure, a
+/// symlink loop, and a genuinely absent file into one answer. That made relink
+/// report "does not exist" about an entry which demonstrably does, and let
+/// global relink skip the repair while still reporting `complete:true`.
+enum TargetPresence {
+    Present,
+    Absent(PathBuf),
+    Unknown(PathBuf, std::io::Error),
+}
+
+/// Inspect a preserved internal target. A `colon-line` locator may name a
+/// literal file, so either spelling existing is enough.
+fn target_presence(target: &Path, locator: Option<&str>) -> TargetPresence {
+    let literal_target = locator.and_then(|locator| append_file_name_suffix(target, locator));
+    if let Some(literal) = literal_target.as_deref() {
+        // `colon-line` gives the literal spelling precedence. Only `NotFound`
+        // proves that falling back to the base path is safe; any other error
+        // leaves the higher-precedence target state unknown.
+        match literal.metadata() {
+            Ok(_) => return TargetPresence::Present,
+            Err(err) if err.kind() == ErrorKind::NotFound => {}
+            Err(err) => return TargetPresence::Unknown(literal.to_path_buf(), err),
+        }
+    }
+
+    // `metadata` follows symlinks, so a valid link to a real file counts as
+    // present, exactly as the previous `exists()` check intended.
+    match target.metadata() {
+        Ok(_) => TargetPresence::Present,
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            TargetPresence::Absent(literal_target.unwrap_or_else(|| target.to_path_buf()))
+        }
+        Err(err) => TargetPresence::Unknown(target.to_path_buf(), err),
+    }
+}
+
+fn unknown_target_finding(
+    source: &Path,
+    target: &Path,
+    err: &std::io::Error,
+    line: usize,
+    id: Option<&str>,
+) -> Finding {
+    let mut finding = Finding::error(
+        FindingCode::UnreadableEntry,
+        format!(
+            "cannot determine whether preserved internal target {} exists: {err}",
+            target.display()
+        ),
+        Some(source.to_path_buf()),
+    );
+    finding.id = id.map(str::to_string);
+    finding.line = Some(line);
+    finding
 }
 
 fn scan_relink_sources(
@@ -413,21 +593,6 @@ fn resolve_target_path(
     }
 }
 
-/// The path a caller should report as missing, or `None` when the current target
-/// exists. A `colon-line` locator may name a literal file, so either spelling
-/// existing is enough.
-fn missing_target_path(target: &Path, locator: Option<&str>) -> Option<PathBuf> {
-    let literal_target = locator.and_then(|locator| append_file_name_suffix(target, locator));
-    let literal_exists = literal_target
-        .as_ref()
-        .is_some_and(|literal_target| literal_target.exists());
-    if literal_exists || target.exists() {
-        None
-    } else {
-        Some(literal_target.unwrap_or_else(|| target.to_path_buf()))
-    }
-}
-
 fn canonical_destination_text(
     source_parent: &Path,
     target: &Path,
@@ -446,8 +611,39 @@ fn canonical_destination_text(
     text
 }
 
-fn render_destination_text(semantic: &str, form: markdown::MarkdownDestinationForm) -> String {
-    match form {
+/// A semantic destination that cannot be serialized back into CommonMark
+/// without changing what it means. It is never a reason to splice approximate
+/// bytes; the plan loses this destination and reports it instead.
+#[derive(Clone, Debug)]
+struct RenderDestinationError {
+    semantic: String,
+    rendered: String,
+}
+
+impl std::fmt::Display for RenderDestinationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "destination {:?} cannot be represented in this form; {:?} does not reparse to it",
+            self.semantic, self.rendered
+        )
+    }
+}
+
+/// Serialize a decoded semantic destination back into authored CommonMark bytes,
+/// then prove the result reparses to exactly that destination.
+///
+/// The parser decodes character references before Slopid ever sees a semantic
+/// path, so emitting decoded text is not an inverse operation. A raw space ends
+/// a bare destination and the construct stops being a link; a raw `&` can be
+/// re-read as a named entity and silently retarget the link. Encoding is
+/// therefore deterministic and the round trip is a precondition of the bytes
+/// becoming digest or write authority — not a sanity check after the fact.
+fn render_destination_text(
+    semantic: &str,
+    form: markdown::MarkdownDestinationForm,
+) -> Result<String, RenderDestinationError> {
+    let rendered = match form {
         markdown::MarkdownDestinationForm::Bare => {
             let mut stack = Vec::new();
             let mut matched = BTreeSet::new();
@@ -465,7 +661,22 @@ fn render_destination_text(semantic: &str, form: markdown::MarkdownDestinationFo
             }
             let mut rendered = String::with_capacity(semantic.len());
             for (offset, ch) in semantic.char_indices() {
-                if ch == '\\' || (matches!(ch, '(' | ')') && !matched.contains(&offset)) {
+                // A bare destination ends at whitespace and cannot hold control
+                // characters, so those become numeric references the parser
+                // decodes back to the original character.
+                if ch == ' ' || ch.is_ascii_control() {
+                    push_numeric_reference(&mut rendered, ch);
+                    continue;
+                }
+                if ch == '&' {
+                    rendered.push_str("&amp;");
+                    continue;
+                }
+                // `<` would open the angle form; `>` would close it. Escaping
+                // both keeps a bare destination unambiguously bare.
+                if matches!(ch, '\\' | '<' | '>')
+                    || (matches!(ch, '(' | ')') && !matched.contains(&offset))
+                {
                     rendered.push('\\');
                 }
                 rendered.push(ch);
@@ -475,6 +686,16 @@ fn render_destination_text(semantic: &str, form: markdown::MarkdownDestinationFo
         markdown::MarkdownDestinationForm::Angle => {
             let mut rendered = String::with_capacity(semantic.len());
             for ch in semantic.chars() {
+                // Angle destinations legitimately carry spaces, but not control
+                // characters — a newline would end the construct entirely.
+                if ch.is_ascii_control() {
+                    push_numeric_reference(&mut rendered, ch);
+                    continue;
+                }
+                if ch == '&' {
+                    rendered.push_str("&amp;");
+                    continue;
+                }
                 if matches!(ch, '\\' | '<' | '>') {
                     rendered.push('\\');
                 }
@@ -482,7 +703,37 @@ fn render_destination_text(semantic: &str, form: markdown::MarkdownDestinationFo
             }
             rendered
         }
+    };
+    if markdown::decode_destination(&rendered, form).as_deref() == Some(semantic) {
+        Ok(rendered)
+    } else {
+        Err(RenderDestinationError {
+            semantic: semantic.to_string(),
+            rendered,
+        })
     }
+}
+
+fn push_numeric_reference(rendered: &mut String, ch: char) {
+    use std::fmt::Write;
+
+    let _ = write!(rendered, "&#{};", ch as u32);
+}
+
+fn render_failure_finding(
+    err: &RenderDestinationError,
+    source: &Path,
+    line: usize,
+    id: Option<&str>,
+) -> Finding {
+    let mut finding = Finding::error(
+        FindingCode::UnreadableEntry,
+        format!("cannot safely represent a repaired destination: {err}"),
+        Some(source.to_path_buf()),
+    );
+    finding.id = id.map(str::to_string);
+    finding.line = Some(line);
+    finding
 }
 
 fn source_parent_of(source: &Path) -> &Path {
@@ -508,15 +759,27 @@ fn unresolved_ref_message(code: FindingCode, target_id: &str) -> String {
     }
 }
 
+/// What one global destination contributes. `Blocked` is a coverage failure
+/// rather than an ordinary candidate finding: unlike an unresolved ref, it means
+/// Slopid could not represent a repair it does have authority over, so the scan
+/// must stop claiming to be complete.
+enum GlobalOutcome {
+    Skip,
+    Blocked,
+    Planned(Replacement),
+}
+
 fn resolve_destination(
     source: &Path,
     destination: markdown::MarkdownDestination,
     index: &documents::DocumentIndex,
     destination_extensions: &[RelinkDestinationExtension],
     findings: &mut Vec<Finding>,
-) -> Option<Replacement> {
+) -> GlobalOutcome {
     let resolved = destination.resolved;
-    let parsed = parse_destination_ref(&resolved, destination_extensions)?;
+    let Some(parsed) = parse_destination_ref(&resolved, destination_extensions) else {
+        return GlobalOutcome::Skip;
+    };
     let target_id = parsed.target_id;
     let Some(record) = index.nodes.get(&target_id) else {
         let code = unresolved_ref_finding_code(index, &target_id);
@@ -528,7 +791,7 @@ fn resolve_destination(
             &target_id,
             destination.line,
         );
-        return None;
+        return GlobalOutcome::Skip;
     };
     let target = match resolve_target_path(record, &parsed.suffix, parsed.seed_destination) {
         TargetResolution::Resolved(target) => target,
@@ -541,22 +804,38 @@ fn resolve_destination(
                 &target_id,
                 destination.line,
             );
-            return None;
+            return GlobalOutcome::Skip;
         }
     };
-    if let Some(missing_target) = missing_target_path(&target, parsed.locator) {
-        push_candidate_finding(
-            findings,
-            FindingCode::RelinkMissingInternalTarget,
-            format!(
-                "preserved internal target does not exist: {}",
-                missing_target.display()
-            ),
-            source,
-            &target_id,
-            destination.line,
-        );
-        return None;
+    match target_presence(&target, parsed.locator) {
+        TargetPresence::Present => {}
+        TargetPresence::Absent(missing_target) => {
+            push_candidate_finding(
+                findings,
+                FindingCode::RelinkMissingInternalTarget,
+                format!(
+                    "preserved internal target does not exist: {}",
+                    missing_target.display()
+                ),
+                source,
+                &target_id,
+                destination.line,
+            );
+            return GlobalOutcome::Skip;
+        }
+        // Unproven state is a coverage failure, not an ordinary candidate
+        // finding: we cannot say the target is absent, so the scan is not
+        // complete either.
+        TargetPresence::Unknown(path, err) => {
+            findings.push(unknown_target_finding(
+                source,
+                &path,
+                &err,
+                destination.line,
+                Some(&target_id),
+            ));
+            return GlobalOutcome::Blocked;
+        }
     }
     let canonical = canonical_destination_text(
         source_parent_of(source),
@@ -564,12 +843,24 @@ fn resolve_destination(
         parsed.locator,
         parsed.fragment,
     );
-    let replacement_text = render_destination_text(&canonical, destination.form);
+    let replacement_text = match render_destination_text(&canonical, destination.form) {
+        Ok(text) => text,
+        Err(err) => {
+            findings.push(render_failure_finding(
+                &err,
+                source,
+                destination.line,
+                Some(&target_id),
+            ));
+            return GlobalOutcome::Blocked;
+        }
+    };
     if resolved == canonical && destination.original == replacement_text {
-        return None;
+        return GlobalOutcome::Skip;
     }
-    Some(Replacement {
+    GlobalOutcome::Planned(Replacement {
         span: destination.span,
+        semantic: canonical,
         change: RelinkChange {
             path: source.to_path_buf(),
             line: destination.line,
@@ -586,6 +877,7 @@ fn split_colon_line(destination: &str) -> Option<(&str, &str)> {
     let (base, locator) = destination.split_at(offset);
     let digits = locator.strip_prefix(':')?;
     if base.is_empty()
+        || base.ends_with('/')
         || digits.is_empty()
         || digits.starts_with('0')
         || !digits.bytes().all(|byte| byte.is_ascii_digit())
@@ -726,13 +1018,7 @@ where
                 continue;
             }
         };
-        let mut updated = file.scanned;
-        for replacement in file.replacements.iter().rev() {
-            updated.splice(
-                replacement.span.clone(),
-                replacement.change.to.as_bytes().iter().copied(),
-            );
-        }
+        let updated = spliced(&file.scanned, &file.replacements);
         if let Err(err) = replace(&file.path, &updated, permissions) {
             complete = false;
             findings.push(Finding::error(
@@ -786,9 +1072,26 @@ fn compare_changes(left: &RelinkChange, right: &RelinkChange) -> std::cmp::Order
 mod tests {
     use super::*;
 
+    #[test]
+    fn split_colon_line_rejects_separator_ended_bases() {
+        assert_eq!(
+            split_colon_line("note.md:33"),
+            Some(("note.md", ":33")),
+            "ordinary file-shaped locators must retain their opt-in behavior"
+        );
+        for destination in ["assets/:33", "./:33", "/:33"] {
+            assert_eq!(
+                split_colon_line(destination),
+                None,
+                "a separator-ended base must keep the whole destination literal: {destination}"
+            );
+        }
+    }
+
     fn replacement(path: &Path, from: &str, to: &str) -> Replacement {
         Replacement {
             span: 0..from.len(),
+            semantic: to.into(),
             change: RelinkChange {
                 path: path.to_path_buf(),
                 line: 1,
@@ -887,6 +1190,7 @@ mod tests {
         let path = Path::new("/a.md");
         let span = |start: usize, end: usize| Replacement {
             span: start..end,
+            semantic: "y".into(),
             change: RelinkChange {
                 path: path.to_path_buf(),
                 line: 1,
@@ -908,18 +1212,194 @@ mod tests {
         assert!(has_overlapping_spans(&[span(0, 2), span(4, 8), span(7, 9)]));
     }
 
+    /// Every semantic destination the renderer must survive, with the form-safe
+    /// boundaries review proved were unprotected: entity-looking text, literal
+    /// ampersands, ASCII whitespace and control characters, backslashes,
+    /// balanced and unmatched parentheses, angle delimiters, and Unicode.
+    const RENDER_MATRIX: &[&str] = &[
+        "plain.md",
+        "a(b).md",
+        "((a)).md",
+        "close).md",
+        "a(b.md",
+        ")(.md",
+        "a)b(c.md",
+        "a(",
+        "a\\b.md",
+        "a\\",
+        "a&copy;.md",
+        "a&amp;.md",
+        "a&#32;b.md",
+        "&.md",
+        "file name.md",
+        "file\tname.md",
+        "a\nb.md",
+        "a\rb.md",
+        "a\u{b}b.md",
+        "a\u{7f}b.md",
+        "a<b>.md",
+        "a>b.md",
+        // A leading `<` is the load-bearing case for bare-form angle
+        // escaping: left raw, the bare wrapper reparses as the angle form.
+        "<lead.md",
+        ">lead.md",
+        "<both>.md",
+        "café/é.md",
+        "a'b\"c.md",
+        "a#b.md",
+        "../work/.archive/202402_sa2a7_task/file name.md",
+        "../work/.archive/202402_sa2a7_task/a&copy;.md",
+    ];
+
+    /// A deliberately independent semantic oracle. It reparses a minimal
+    /// synthetic link rather than calling the production verifier, so a bug in
+    /// shared verification cannot hide a matching bug in the renderer.
+    fn reparsed_destination(raw: &str, form: markdown::MarkdownDestinationForm) -> Option<String> {
+        use pulldown_cmark::{Event, LinkType, Parser, Tag};
+
+        let wrapper = match form {
+            markdown::MarkdownDestinationForm::Bare => format!("[x]({raw})"),
+            markdown::MarkdownDestinationForm::Angle => format!("[x](<{raw}>)"),
+        };
+        let mut found = None;
+        for event in Parser::new(&wrapper) {
+            match event {
+                Event::Start(Tag::Link {
+                    link_type,
+                    dest_url,
+                    ..
+                }) => {
+                    if link_type != LinkType::Inline || found.is_some() {
+                        return None;
+                    }
+                    found = Some(dest_url.to_string());
+                }
+                Event::Start(Tag::Image { .. }) => return None,
+                _ => {}
+            }
+        }
+        found
+    }
+
+    fn rendered(semantic: &str, form: markdown::MarkdownDestinationForm) -> String {
+        render_destination_text(semantic, form)
+            .unwrap_or_else(|err| panic!("expected {semantic:?} to be representable: {err}"))
+    }
+
+    #[test]
+    fn destination_renderer_round_trips_every_supported_semantic_boundary() {
+        use markdown::MarkdownDestinationForm::{Angle, Bare};
+
+        for semantic in RENDER_MATRIX {
+            for form in [Bare, Angle] {
+                let text = rendered(semantic, form);
+                assert_eq!(
+                    reparsed_destination(&text, form).as_deref(),
+                    Some(*semantic),
+                    "rendering {semantic:?} as {form:?} produced {text:?}, \
+                     which does not reparse to the same destination"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn destination_renderer_encodes_entity_and_whitespace_boundaries_exactly() {
+        use markdown::MarkdownDestinationForm::{Angle, Bare};
+
+        // A literal ampersand must never be re-emitted raw: `a&copy;.md` would
+        // reparse as `a©.md` and point at a different file.
+        assert_eq!(rendered("a&copy;.md", Bare), "a&amp;copy;.md");
+        assert_eq!(rendered("a&copy;.md", Angle), "a&amp;copy;.md");
+        // A decoded space cannot be spliced back literally: a bare destination
+        // ends at whitespace, so the construct stops being a link at all.
+        assert_eq!(rendered("file name.md", Bare), "file&#32;name.md");
+        // Angle form legitimately carries spaces.
+        assert_eq!(rendered("file name.md", Angle), "file name.md");
+        assert_eq!(rendered("file\tname.md", Bare), "file&#9;name.md");
+        assert_eq!(rendered("file\tname.md", Angle), "file&#9;name.md");
+    }
+
+    #[test]
+    fn destination_renderer_refuses_a_value_it_cannot_prove() {
+        use markdown::MarkdownDestinationForm::{Angle, Bare};
+
+        // CommonMark replaces a NUL character reference with U+FFFD, so no
+        // authored spelling of this destination exists. It must fail closed
+        // rather than emit bytes that mean something else.
+        for form in [Bare, Angle] {
+            let err = render_destination_text("a\0b.md", form)
+                .expect_err("a NUL destination has no faithful CommonMark spelling");
+            assert!(err.to_string().contains("cannot be represented"), "{err}");
+        }
+    }
+
     #[test]
     fn destination_renderer_escapes_only_form_sensitive_content() {
         use markdown::MarkdownDestinationForm::{Angle, Bare};
 
-        assert_eq!(render_destination_text("a(b).md", Bare), "a(b).md");
-        assert_eq!(render_destination_text("close).md", Bare), "close\\).md");
-        assert_eq!(render_destination_text("a(b.md", Bare), "a\\(b.md");
-        assert_eq!(render_destination_text("a\\b.md", Bare), "a\\\\b.md");
-        assert_eq!(render_destination_text("a(b).md", Angle), "a(b).md");
-        assert_eq!(
-            render_destination_text("a\\b<c>.md", Angle),
-            "a\\\\b\\<c\\>.md"
+        assert_eq!(rendered("a(b).md", Bare), "a(b).md");
+        assert_eq!(rendered("close).md", Bare), "close\\).md");
+        assert_eq!(rendered("a(b.md", Bare), "a\\(b.md");
+        assert_eq!(rendered("a\\b.md", Bare), "a\\\\b.md");
+        assert_eq!(rendered("a(b).md", Angle), "a(b).md");
+        assert_eq!(rendered("a\\b<c>.md", Angle), "a\\\\b\\<c\\>.md");
+    }
+
+    #[test]
+    fn the_whole_file_proof_refuses_an_overlapping_set_regardless_of_caller_order() {
+        // `spliced` is only correct for disjoint spans, and the two planners
+        // guard overlap at different points. Making the proof itself total means
+        // neither ordering can hand `spliced` a set it cannot splice.
+        let path = Path::new("/a.md");
+        let scanned = b"[a](one.md) [b](two.md)\n".to_vec();
+        let before = markdown::destinations(std::str::from_utf8(&scanned).unwrap());
+        assert_eq!(before.destinations.len(), 2, "{before:#?}");
+
+        let disjoint = before
+            .destinations
+            .iter()
+            .map(|destination| Replacement {
+                span: destination.span.clone(),
+                semantic: destination.resolved.clone(),
+                change: RelinkChange {
+                    path: path.to_path_buf(),
+                    line: 1,
+                    column: 1,
+                    id: None,
+                    from: destination.original.clone(),
+                    to: destination.original.clone(),
+                },
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            splice_preserves_destinations(&scanned, &before, &disjoint),
+            "an identity rewrite of disjoint spans must pass"
+        );
+
+        // Same spans, but the first is widened to swallow the second *and* both
+        // shrink. That combination is what makes the guard load-bearing rather
+        // than incidental: splicing back to front would leave the first span's
+        // end past the shortened buffer, so without the guard this panics inside
+        // `Vec::splice`. A fixture that merely overlaps is refused by the
+        // destination-count check below and proves nothing about the guard.
+        let mut overlapping = disjoint;
+        overlapping[0].span.end = overlapping[1].span.end;
+        for replacement in &mut overlapping {
+            replacement.change.to = "z".to_string();
+            replacement.semantic = "z".to_string();
+        }
+        assert!(
+            has_overlapping_spans(&overlapping),
+            "fixture must actually overlap"
+        );
+        assert!(
+            overlapping[0].span.end > scanned.len() - 6,
+            "fixture must shrink enough that an unguarded splice runs out of bounds"
+        );
+        assert!(
+            !splice_preserves_destinations(&scanned, &before, &overlapping),
+            "an overlapping set must be refused before any splice is attempted"
         );
     }
 

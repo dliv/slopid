@@ -101,11 +101,18 @@ For any other local destination, projected mode computes:
    namespace when it lies beneath the projected owner.
 
 The current and projected candidates use the same existence and opt-in
-`colon-line` rules as recognized refs. A valid current candidate is unchanged
+`colon-line` rules as recognized refs, including that a separator-ended base is
+not a locator and the whole spelling remains literal. A valid current candidate is unchanged
 when authored-after still names its projected location; otherwise Slopid plans
 the canonical future-relative text. A valid projected-only candidate is an
 already-forward retry and is never reversed. Two valid candidates naming
-different referents are ambiguous and block. No valid candidate also blocks.
+different referents are ambiguous and block. When the raw current and projected
+presence states are both `Absent`, the destination instead emits
+`relink-unresolved-local-destination` with `severity:warning`, proposes no
+replacement, and keeps the plan complete. This decision is made from raw
+presence, never from validity booleans: a projected candidate can be present but
+invalid because the authored-after path does not survive projection, and that
+state remains blocking drift. Unknown filesystem state also remains blocking.
 
 ## CommonMark destination representation
 
@@ -113,15 +120,100 @@ Comparison uses the parser's decoded semantic destination. Wire `from` values
 retain the raw authored bytes, and replacement `to` values are rendered in the
 same destination form the author used.
 
-Bare destinations retain balanced parentheses, escape unmatched parentheses,
-and escape literal backslashes. Angle destinations treat parentheses as normal
-content and escape literal backslashes and angle delimiters. Inline links,
-images, and reference definitions follow the same rule. Relink never splices
-decoded path text directly when CommonMark would reparse it as a different
-destination.
+Three properties are preconditions of any destination becoming digest or write
+authority, not checks applied afterwards.
+
+**One proven raw span.** The parser reports the whole construct, and a legal
+title or link label may contain the same `](` or `]:` delimiter a destination
+follows. Delimiter position is therefore never mutation authority on its own.
+Every delimiter occurrence inside the construct — excluding those belonging to a
+nested construct the parser reports separately — yields a candidate raw range,
+and byte-identical ranges are deduplicated by position.
+
+Each candidate is decoded independently in the grammar it was authored in: an
+inline candidate inside a minimal inline link, a reference-definition candidate
+inside a minimal definition. The inline wrapper ends its destination with
+whitespace rather than the closing parenthesis, which is what lets it express a
+destination ending in a literal backslash — inside `[x](note\)` that backslash
+would escape the parenthesis and nothing would parse. Because of that wrapper the
+two grammars accept the same destinations in practice; verifying in the authored
+grammar is defence in depth and the more faithful question to ask, not a
+behavioural requirement.
+
+Whitespace **anywhere** in a candidate is refused outright in bare form, using
+CommonMark's whitespace set rather than a host language's ASCII notion of it —
+notably including line tabulation (`U+000B`). Whitespace would either merge with the
+wrapper's own delimiter or turn the remainder into a title, and the parser would
+then report a destination *shorter* than the candidate, which is exactly the false
+claim these rules exist to prevent. Checking only the candidate's edges was not
+enough: a trailing `()` reads as an **empty** title, which a nonempty-title check
+cannot reject. A bare destination cannot contain whitespace at all, so refusing it
+loses nothing.
+
+A candidate is accepted only when that wrapper reads as exactly one construct
+whose destination equals the parser's own destination, **with no title and no
+leftover bytes**. Matching the decoded destination alone is not sufficient: for
+candidate bytes of `DEST "TITLE"` the wrapper is a single legal link whose
+destination really is `DEST`, so a destination-only comparison would accept a
+range covering the title as well and splice over authored text.
+
+Exactly one accepted candidate is success. Zero accepted candidates, or two or
+more accepted candidates at different positions, fail closed: the destination is
+reported and completeness is lost rather than a span being guessed.
+
+**One proven round trip.** Rendering starts from canonical decoded text and is a
+serializer, not a punctuation escaper. Bare destinations retain balanced
+parentheses, escape unmatched parentheses, escape literal backslashes and angle
+delimiters, encode literal `&` as `&amp;`, and encode spaces and ASCII control
+characters as numeric character references. Angle destinations treat parentheses
+as normal content, retain permitted spaces, escape literal backslashes and angle
+delimiters, encode literal `&` as `&amp;`, and encode ASCII control characters.
+Inline links, images, and reference definitions follow the same rule. The
+rendered bytes are then reparsed and must yield exactly one destination equal to
+the requested semantic value.
+
+Rendering failure is defence in depth rather than a routinely reached branch: the
+encoding above covers every character class a parsed path can contain, so in
+practice only a value no CommonMark spelling can express — a NUL, which the
+parser would already have replaced — is refused. When it does refuse, the
+destination produces no replacement at all.
+
+**One proven file.** The two properties above prove a replacement in isolation.
+They cannot prove that the replacement leaves the *rest* of the file parsing as
+the plan assumed. A parenthesis this renderer legitimately emits can balance an
+earlier malformed construct and make it swallow the very link being repaired,
+leaving a different destination behind while every local check passed. So before
+a file's replacements become digest or write authority, they are spliced into a
+scratch copy and the result is re-scanned: it must hold exactly the destinations
+the plan intended — same count, same order, each replaced one at its new semantic
+value, each untouched one unchanged, and no new scan uncertainty. A file that
+fails this proof contributes `unreadable-entry`, no changes, and
+`complete:false`; other files are unaffected. Planning and apply share one splice
+implementation so the bytes verified are the bytes written.
+
+These properties exist because the parser decodes character references before
+Slopid sees a semantic path, so emitting decoded text is not an inverse
+operation, and because a destination's bytes interact with the markup around
+them. A raw space ends a bare destination and the construct stops being a link; a
+raw `&` can be re-read as a named entity and retarget the link at a different
+file; a parenthesis can re-delimit a neighbour. Relink never splices decoded path
+text directly when CommonMark would reparse it as a different destination.
+
+A destination inside this command's authority whose raw span or rendered form
+cannot be proven yields `unreadable-entry`, makes the result incomplete, binds
+its source into the plan digest, and contributes no change. A destination
+outside that authority is irrelevant whether or not it could be located: global
+repair covers only single-recognized-ref destinations, and projected mode covers
+only the move effect set. This keeps parser uncertainty from either becoming
+false success or widening authority.
 
 The future owner is allowed not to exist, because relink runs before the
-lifecycle rename. The current owner and the current internal target must exist.
+lifecycle rename. The current owner and the current internal target must exist,
+and "exist" means proven: a preserved internal target that resolves is present,
+one whose inspection reports `NotFound` is absent, and any other inspection
+error — a permission failure, a symlink loop — leaves its state unproven. An
+unproven target is a coverage failure that yields `unreadable-entry` and
+`complete:false`, never the claim that the target does not exist.
 Before the rename, projected mode never scans or writes anything under the future
 owner. After it, the future owner *is* the current owner and is scanned normally;
 see `Settled verification`.
@@ -133,25 +225,65 @@ dangling symlink at the destination would otherwise pass the guard, the scoped
 write would apply, and the caller's later rename would fail with every affected
 link already rewritten to a location the move cannot reach.
 
+That inspection is classified explicitly, because only `NotFound` proves the
+projected owner absent. Any successful inspection is a collision. Every other
+error — a permission failure, an unreadable parent, any other I/O error — leaves
+the destination's state unknown and is a command-level refusal with nonzero
+status, human stderr, and empty stdout, before any result JSON or authored
+write. Treating unknown state as absence let a scoped write rewrite every
+inbound link before a rename that could not succeed.
+
 ## What `complete` does and does not promise
 
-`complete:true` means every local destination in the declared authored-source
+`complete:true` means every move-caused repair in the declared authored-source
 coverage was classified and this scoped plan is safe to apply. It covers
-ref-less and multi-ref local paths as well as recognized-ref destinations.
+ref-less and multi-ref local paths as well as recognized-ref destinations, and
+it requires that every in-scope destination had one proven raw span and that
+every proposed replacement passed its round-trip proof. It is not a certificate
+that every local destination resolves: a generic destination proven absent
+under both readings remains an operator-visible warning without creating or
+authorizing replacement bytes or making the plan incomplete.
 
 It is not a certificate over Markdown-looking bytes outside that declared
 coverage. Task `inbox`, note roots, `tmp`, VCS metadata, and ignored paths remain
 outside Slopid's read and mutation authority. A caller must not describe
 `complete:true` as proof over every Markdown file anywhere on disk.
 
+`complete:true` is also not a statement about concurrency. It describes the
+corpus Slopid read, not the corpus at the moment a later rename happens; see
+`Authored-writer quiescence`.
+
 ## Settled verification
 
 When the selected owner already lives under the selected root, the projection is
 `settled:true` and `from_owner` equals `to_owner`. The same scoped union is
-inspected: a canonical destination is settled, and a noncanonical one yields
-`relink-projection-drift` with `complete:false`. Settled verification never
-plans a move-caused change. This is what makes final close verification and a
-retry after a lost response safe.
+inspected under the split rule below. Settled verification never plans a
+move-caused change. Recognized-ref canonical drift, ambiguity, unknown state,
+or unsafe representation still yields an error with `complete:false`; proven
+generic absence retains the warning and leaves completeness true. This is what
+makes final close verification and a retry after a lost response safe.
+
+Canonicality is required only where Slopid can produce it. A destination carrying
+exactly one recognized ref must be canonical, because global relink normalizes
+those. A generic ref-less or multi-ref destination is verified by whether it
+**resolves**: one that resolves to an existing target under the settled owner is
+clean even when its spelling is noncanonical. One proven absent yields
+`relink-unresolved-local-destination` with `severity:warning`; ambiguity or
+unproven inspection still blocks.
+
+The asymmetry is deliberate and was chosen after the symmetric rule proved
+unsatisfiable. Slopid normalizes generic destinations in no mode, so requiring
+canonical text for them demanded a spelling the tool cannot write. Ordinary
+authored forms such as `./x.md` and `dir/` therefore had no repair path, and
+because settled verification runs only once the owner has moved, the refusal landed
+*after* the caller's irreversible rename while the pre-move preview still reported
+`complete:true`. Treating proven absence as a warning keeps verification focused
+on the bound move outcome without claiming corpus health or demanding repair
+authority this command does not have.
+
+This narrows a spelling requirement, not a safety one. A spelling that genuinely
+breaks because the move changes the owner's depth is still caught *before* the move
+by the authored-path rule above.
 
 ## Result shape
 
@@ -165,11 +297,12 @@ continue to carry a string ID. The two projected-only keys are omitted entirely
 from global results, which therefore still contain exactly four keys.
 
 `complete` means the move-scoped scan and plan are safe to use. Unreadable
-authored source coverage, an ambiguous or unresolved relevant target, a missing
-relevant internal target, overlapping relevant spans, or projection drift make
-it false. Candidate problems outside the effect set are omitted from this scoped
-result, which is why a projected scan can be complete while a global scan of the
-same corpus is not.
+authored source coverage, ambiguity, an unresolved recognized ref, a missing
+recognized-ref internal target, overlapping relevant spans, unknown inspection,
+or actual projection drift make it false. Proven both-absent generic
+non-resolution is the explicit warning exception. Candidate problems outside the
+effect set are omitted from this scoped result, which is why a projected scan can
+be complete while a global scan of the same corpus is not.
 
 `applied:false` means preview or a pre-write refusal. `applied:true` means the
 digest matched, the plan was complete, and the per-file apply phase ran.
@@ -184,6 +317,13 @@ Markdown file holding at least one in-scope local destination — including a
 generic, settled, missing, ambiguous, or drifted one — recorded with its path and
 the SHA-256 of its entire scanned byte sequence. The v2 marker prevents any v1
 approval from authorizing the stronger effect set.
+
+An unresolved-local warning is substantive authority. Removing it or changing
+any serialized field changes the digest independently of source hashes, and
+changing any byte in its warning-bearing source changes the digest independently
+of warning fields. If a target disappears after preview, the new warning and
+source authority produce a different plan and the stale write refuses before
+authored mutation.
 
 The digest deliberately excludes the expected digest, `applied`, the transient
 `relink-plan-changed` finding, timestamps, filesystem mtimes, and display prose.
@@ -214,20 +354,53 @@ whole with `relink-concurrent-change` and an atomic failure adds
 `relink-write-failed`; either makes `complete:false` without rolling back an
 independent successful file, and only applied changes are returned. A matching
 complete zero-change plan is convergence: `applied:true`, `complete:true`, zero
-changes.
+changes. This includes warning-only plans, which retain their findings in the
+apply result.
 
 Every projected write returns the approved pre-write digest, never a post-write
 digest. A partial result is intentional and forward-recoverable: already-future
 destinations settle on the next preview and only the remaining repair is
 planned. The caller obtains the next state through a fresh preview.
 
+## Authored-writer quiescence
+
+The caller must keep authored Markdown writers quiescent for the whole interval
+from an approved projected `--write` through the terminal owner rename it
+performs afterwards. This is a precondition of the operation, stated here so a
+caller can meet it; Slopid does not enforce it.
+
+Slopid does not detect, discover, or lease writers. It has no editor discovery,
+no process or session registry, no lock file, and no compare-and-swap. The
+per-file byte comparison is a useful early-race check and nothing more: it
+detects a change that is already visible when the comparison runs, and skips that
+file whole with `relink-concurrent-change`.
+
+It is not a compare-and-swap. The comparison, the permission read, the output
+construction, and the atomic replacement are separate steps, so an authored edit
+that lands after the comparison and before the replacement is overwritten
+without a finding. Atomic replacement prevents a torn file, not a lost
+concurrent edit. That narrow window is an accepted residual of this version, and
+no part of this contract may be described as closing it.
+
+A caller that cannot guarantee quiescence should not treat a projected write and
+a subsequent rename as safe. If an unexpected writer may have run, the recovery
+is a fresh preview against current bytes; the previous byte comparison is not
+evidence about a write that could have landed after it.
+
 ## Findings and exit behavior
 
-This contract adds exactly two stable wire values: `relink-projection-drift`, a
-substantive part of the scoped plan, and `relink-plan-changed`, a transient apply
-refusal describing the request rather than the corpus. Both are errors. Neither
-participates in the shared `affects-completeness` or operational classifications
-used by `lint`, because neither can appear in a document-index scan.
+This contract adds three stable wire values. `relink-projection-drift` is a
+substantive scoped error, `relink-plan-changed` is a transient apply-refusal
+error, and `relink-unresolved-local-destination` is a substantive
+`severity:warning` finding for raw both-absent generic state. None participates
+in the shared `affects-completeness` or operational classifications used by
+`lint`, because none can appear in a document-index scan.
+
+An aggregate close caller must display the warning and keep it in approval
+authority. If confirmed cleanup intentionally retires the warning's exact
+forest, sandbox, runtime, or other owned target, the aggregate destructive
+preview binds that meaning; settled verification must not rediscover it as a
+late terminal failure. Slopid itself carries no lifecycle or deletion policy.
 
 Every usable projected result exits 0 with JSON on stdout, including
 `complete:false` previews, digest mismatches, incomplete-plan write refusals, and

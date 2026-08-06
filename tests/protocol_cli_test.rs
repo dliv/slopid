@@ -174,6 +174,22 @@ fn finding_codes(value: &Value) -> Vec<&str> {
         .collect()
 }
 
+fn assert_unresolved_local_warning(value: &Value, path: &Path, line: u64, message: &str) {
+    let canonical_path = fs::canonicalize(path).unwrap();
+    assert_eq!(
+        value["findings"],
+        serde_json::json!([{
+            "code": "relink-unresolved-local-destination",
+            "severity": "warning",
+            "message": message,
+            "id": null,
+            "path": canonical_path.display().to_string(),
+            "line": line,
+        }]),
+        "{value:#}"
+    );
+}
+
 fn change_pairs(value: &Value) -> Vec<(String, String)> {
     value["changes"]
         .as_array()
@@ -1451,6 +1467,134 @@ fn relink_colon_line_prefers_an_existing_literal_colon_filename() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn relink_colon_line_unknown_literal_cannot_fall_back_to_present_base() {
+    let tmp = move_project();
+    configure_relink_extensions(tmp.path(), &["colon-line"]);
+    let owner = tmp.path().join("work/202402_sa2a7_task");
+    let base = owner.join("note.md");
+    let literal = owner.join("note.md:33");
+    write_markdown(&base, "# Base target\n");
+    std::os::unix::fs::symlink("note.md:33", &literal).unwrap();
+    assert!(
+        literal.symlink_metadata().is_ok() && literal.metadata().is_err(),
+        "fixture must expose an existing literal entry whose target state is unknown"
+    );
+    assert!(base.metadata().is_ok(), "base target must be readable");
+    let source = tmp.path().join("knowledge/colon-line-unknown.md");
+    write_markdown(&source, "[target](../work/202402_sa2a7_task/note.md:33)\n");
+    let before = text_of(&source);
+
+    let global = global_relink(tmp.path(), false);
+    assert_eq!(global["complete"], false, "{global:#}");
+    assert_eq!(finding_codes(&global), ["unreadable-entry"], "{global:#}");
+    assert!(
+        global["changes"].as_array().unwrap().is_empty(),
+        "{global:#}"
+    );
+
+    let projected = projected_preview(tmp.path(), "sa2a7", ".archive");
+    assert_eq!(projected["complete"], false, "{projected:#}");
+    assert_eq!(
+        finding_codes(&projected),
+        ["unreadable-entry"],
+        "{projected:#}"
+    );
+    assert!(
+        projected["changes"].as_array().unwrap().is_empty(),
+        "{projected:#}"
+    );
+
+    let refused = projected_write(tmp.path(), "sa2a7", ".archive", &plan_digest(&projected));
+    assert_eq!(refused["applied"], false, "{refused:#}");
+    assert_eq!(refused["complete"], false, "{refused:#}");
+    assert_eq!(text_of(&source), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn relink_separator_ended_colon_digits_remain_literal_and_unknown() {
+    let global_project = move_project();
+    configure_relink_extensions(global_project.path(), &["colon-line"]);
+    let global_owner = global_project.path().join("work/202402_sa2a7_task");
+    let global_assets = global_owner.join("assets");
+    fs::create_dir_all(&global_assets).unwrap();
+    let global_literal = global_assets.join(":33");
+    std::os::unix::fs::symlink(":33", &global_literal).unwrap();
+    assert!(
+        global_literal.symlink_metadata().is_ok() && global_literal.metadata().is_err(),
+        "fixture must expose the exact literal child with unknown target state"
+    );
+    assert!(
+        global_assets.metadata().is_ok(),
+        "the separator-ended base must stay readable"
+    );
+    let global_source = global_project
+        .path()
+        .join("knowledge/separator-ended-global.md");
+    write_markdown(
+        &global_source,
+        "[target](../work/202402_sa2a7_task/assets/:33)\n",
+    );
+    let global_before = text_of(&global_source);
+
+    let global = global_relink(global_project.path(), false);
+    assert_eq!(global["complete"], false, "{global:#}");
+    assert_eq!(finding_codes(&global), ["unreadable-entry"], "{global:#}");
+    assert!(
+        global["changes"].as_array().unwrap().is_empty(),
+        "{global:#}"
+    );
+    assert_eq!(text_of(&global_source), global_before);
+
+    let projected_project = move_project();
+    configure_relink_extensions(projected_project.path(), &["colon-line"]);
+    let projected_owner = projected_project.path().join("work/202402_sa2a7_task");
+    let projected_assets = projected_owner.join("assets");
+    fs::create_dir_all(&projected_assets).unwrap();
+    let projected_literal = projected_assets.join(":33");
+    std::os::unix::fs::symlink(":33", &projected_literal).unwrap();
+    assert!(
+        projected_literal.symlink_metadata().is_ok() && projected_literal.metadata().is_err(),
+        "fixture must expose the exact literal child with unknown target state"
+    );
+    assert!(
+        projected_assets.metadata().is_ok(),
+        "the separator-ended base must stay readable"
+    );
+    let projected_source = projected_owner.join("separator-ended-projected.md");
+    write_markdown(&projected_source, "[target](assets/:33)\n");
+    let projected_before = text_of(&projected_source);
+
+    let projected = projected_preview(projected_project.path(), "sa2a7", ".archive");
+    assert_eq!(projected["complete"], false, "{projected:#}");
+    assert_eq!(
+        finding_codes(&projected),
+        ["unreadable-entry"],
+        "{projected:#}"
+    );
+    assert!(
+        projected["changes"].as_array().unwrap().is_empty(),
+        "{projected:#}"
+    );
+
+    let refused = projected_write(
+        projected_project.path(),
+        "sa2a7",
+        ".archive",
+        &plan_digest(&projected),
+    );
+    assert_eq!(refused["applied"], false, "{refused:#}");
+    assert_eq!(refused["complete"], false, "{refused:#}");
+    assert_eq!(finding_codes(&refused), ["unreadable-entry"], "{refused:#}");
+    assert!(
+        refused["changes"].as_array().unwrap().is_empty(),
+        "{refused:#}"
+    );
+    assert_eq!(text_of(&projected_source), projected_before);
+}
+
 #[test]
 fn relink_never_scans_or_changes_inbox_note_or_done_queues() {
     let tmp = typed_project();
@@ -1776,7 +1920,7 @@ fn relink_projected_generic_destination_retry_is_forward_only() {
 }
 
 #[test]
-fn relink_projected_generic_destination_ambiguity_and_missing_target_block() {
+fn relink_projected_generic_destination_ambiguity_remains_blocking() {
     let ambiguous = move_project();
     write_markdown(&ambiguous.path().join("GUIDE.md"), "# Current\n");
     write_markdown(&ambiguous.path().join("work/GUIDE.md"), "# Projected\n");
@@ -1789,17 +1933,140 @@ fn relink_projected_generic_destination_ambiguity_and_missing_target_block() {
         finding_codes(&ambiguous_preview).contains(&"relink-projection-drift"),
         "{ambiguous_preview:#}"
     );
+}
 
-    let missing = move_project();
-    let missing_source = missing.path().join("work/202402_sa2a7_task/links.md");
-    write_markdown(&missing_source, "[missing](../../MISSING.md)\n");
-    let missing_preview = projected_preview(missing.path(), "sa2a7", ".archive");
-    assert_eq!(missing_preview["complete"], false);
-    assert!(missing_preview["changes"].as_array().unwrap().is_empty());
-    assert!(
-        finding_codes(&missing_preview).contains(&"relink-projection-drift"),
-        "{missing_preview:#}"
+#[test]
+fn relink_projected_both_absent_generic_destination_is_digest_bound_advisory() {
+    let tmp = move_project();
+    let root = fs::canonicalize(tmp.path()).unwrap();
+    let source = tmp.path().join("work/202402_sa2a7_task/links.md");
+    let authored = "[missing](../../MISSING.md)\n";
+    write_markdown(&source, authored);
+
+    let preview = projected_preview(tmp.path(), "sa2a7", ".archive");
+    assert_eq!(preview["complete"], true, "{preview:#}");
+    assert_eq!(preview["applied"], false, "{preview:#}");
+    assert!(preview["changes"].as_array().unwrap().is_empty());
+    let message = format!(
+        "local destination resolves to neither current {} nor projected {}",
+        root.join("MISSING.md").display(),
+        root.join("work/MISSING.md").display(),
     );
+    assert_unresolved_local_warning(&preview, &source, 1, &message);
+    let digest = plan_digest(&preview);
+
+    let applied = projected_write(tmp.path(), "sa2a7", ".archive", &digest);
+    assert_eq!(applied["applied"], true, "{applied:#}");
+    assert_eq!(applied["complete"], true, "{applied:#}");
+    assert!(applied["changes"].as_array().unwrap().is_empty());
+    assert_unresolved_local_warning(&applied, &source, 1, &message);
+    assert_eq!(text_of(&source), authored);
+
+    write_markdown(
+        &source,
+        "[missing](../../MISSING.md)\n\nWarning-bearing source prose.\n",
+    );
+    let prose_changed = projected_preview(tmp.path(), "sa2a7", ".archive");
+    assert_eq!(prose_changed["complete"], true, "{prose_changed:#}");
+    assert_unresolved_local_warning(&prose_changed, &source, 1, &message);
+    assert_ne!(
+        plan_digest(&prose_changed),
+        digest,
+        "warning-bearing source bytes must remain in digest authority"
+    );
+}
+
+#[test]
+fn relink_projected_settled_both_absent_relative_and_absolute_paths_warn() {
+    let relative = move_project();
+    let relative_root = fs::canonicalize(relative.path()).unwrap();
+    let staged = relative.path().join("work/202402_sa2a7_task");
+    fs::create_dir_all(relative.path().join("work/.archive")).unwrap();
+    fs::rename(
+        &staged,
+        relative.path().join("work/.archive/202402_sa2a7_task"),
+    )
+    .unwrap();
+    let relative_source = relative
+        .path()
+        .join("work/.archive/202402_sa2a7_task/links.md");
+    write_markdown(&relative_source, "[missing](../../MISSING.md)\n");
+
+    let relative_preview = projected_preview(relative.path(), "sa2a7", ".archive");
+    assert_eq!(relative_preview["projection"]["settled"], true);
+    assert_eq!(relative_preview["complete"], true, "{relative_preview:#}");
+    assert!(relative_preview["changes"].as_array().unwrap().is_empty());
+    let relative_message = format!(
+        "local destination does not resolve: {}",
+        relative_root.join("work/MISSING.md").display(),
+    );
+    assert_unresolved_local_warning(&relative_preview, &relative_source, 1, &relative_message);
+
+    let absolute = move_project();
+    let staged = absolute.path().join("work/202402_sa2a7_task");
+    fs::create_dir_all(absolute.path().join("work/.archive")).unwrap();
+    fs::rename(
+        &staged,
+        absolute.path().join("work/.archive/202402_sa2a7_task"),
+    )
+    .unwrap();
+    let absolute_source = absolute
+        .path()
+        .join("work/.archive/202402_sa2a7_task/links.md");
+    let removed_forest = absolute.path().join("removed-forest/CURRENT_STATE.md");
+    write_markdown(
+        &absolute_source,
+        &format!("[removed](<{}>)\n", removed_forest.display()),
+    );
+
+    let absolute_preview = projected_preview(absolute.path(), "sa2a7", ".archive");
+    assert_eq!(absolute_preview["projection"]["settled"], true);
+    assert_eq!(absolute_preview["complete"], true, "{absolute_preview:#}");
+    assert!(absolute_preview["changes"].as_array().unwrap().is_empty());
+    let absolute_message = format!(
+        "local destination does not resolve: {}",
+        removed_forest.display(),
+    );
+    assert_unresolved_local_warning(&absolute_preview, &absolute_source, 1, &absolute_message);
+}
+
+#[test]
+fn relink_projected_target_disappearance_refuses_the_stale_digest() {
+    let tmp = move_project();
+    let root = fs::canonicalize(tmp.path()).unwrap();
+    let target = tmp.path().join("GUIDE.md");
+    write_markdown(&target, "# Guide\n");
+    let source = tmp.path().join("work/202402_sa2a7_task/links.md");
+    let authored = "[guide](../../GUIDE.md)\n";
+    write_markdown(&source, authored);
+
+    let preview = projected_preview(tmp.path(), "sa2a7", ".archive");
+    assert_eq!(preview["complete"], true, "{preview:#}");
+    assert_eq!(preview["changes"].as_array().unwrap().len(), 1);
+    assert!(finding_codes(&preview).is_empty(), "{preview:#}");
+    let stale_digest = plan_digest(&preview);
+
+    fs::remove_file(&target).unwrap();
+    let refused = projected_write(tmp.path(), "sa2a7", ".archive", &stale_digest);
+    assert_eq!(refused["applied"], false, "{refused:#}");
+    assert_eq!(refused["complete"], false, "{refused:#}");
+    assert!(refused["changes"].as_array().unwrap().is_empty());
+    assert!(
+        finding_codes(&refused).contains(&"relink-plan-changed"),
+        "{refused:#}"
+    );
+    assert_eq!(text_of(&source), authored);
+
+    let fresh = projected_preview(tmp.path(), "sa2a7", ".archive");
+    assert_eq!(fresh["complete"], true, "{fresh:#}");
+    assert!(fresh["changes"].as_array().unwrap().is_empty());
+    let message = format!(
+        "local destination resolves to neither current {} nor projected {}",
+        root.join("GUIDE.md").display(),
+        root.join("work/GUIDE.md").display(),
+    );
+    assert_unresolved_local_warning(&fresh, &source, 1, &message);
+    assert_ne!(plan_digest(&fresh), stale_digest);
 }
 
 #[test]
@@ -2563,4 +2830,812 @@ fn relink_projected_refuses_ambiguous_root_duplicate_id_and_existing_destination
             project.display()
         );
     }
+}
+
+/// One legal inline link whose optional title contains a `](` sequence that
+/// re-scans to the *same* semantic destination as the real one. Neither
+/// candidate span can be preferred on syntax alone, so planning must fail
+/// closed instead of guessing which bytes to replace.
+const AMBIGUOUS_MOVING_DESTINATION: &str = "[a](../work/202402_sa2a7_task/CURRENT_STATE.md \"t](../work/202402_sa2a7_task/CURRENT_STATE.md t\")\n";
+
+/// The same construct pointing at an owner that is not moving, from a source
+/// that does not move either.
+const AMBIGUOUS_UNRELATED_DESTINATION: &str = "[a](../work/202404_sd5d2_other/CURRENT_STATE.md \"t](../work/202404_sd5d2_other/CURRENT_STATE.md t\")\n";
+
+#[test]
+fn relink_projected_title_and_label_decoys_cannot_authorize_a_wrong_span() {
+    let tmp = move_project();
+    let owner = tmp.path().join("work/202402_sa2a7_task");
+    write_markdown(&owner.join("img.md"), "# Image\n");
+    let source = tmp.path().join("knowledge/decoy.md");
+    // Legal CommonMark: a quoted title may contain `](`, and a link label may
+    // contain an escaped `]` followed by `:`. Both sit inside the range the
+    // parser reports for the construct, so neither may be mistaken for the
+    // destination.
+    write_markdown(
+        &source,
+        "[task](../work/202402_sa2a7_task/CURRENT_STATE.md \"see ](fake.md) here\")\n\
+![img](../work/202402_sa2a7_task/img.md \"also ](fake.md) here\")\n\
+\n\
+[a\\]: decoy]: ../work/202402_sa2a7_task/CURRENT_STATE.md\n",
+    );
+
+    let preview = projected_preview(tmp.path(), "sa2a7", ".archive");
+    assert_eq!(preview["complete"], true, "{preview:#}");
+    assert!(finding_codes(&preview).is_empty(), "{preview:#}");
+    assert_eq!(
+        change_pairs(&preview),
+        [
+            (
+                "../work/202402_sa2a7_task/CURRENT_STATE.md".to_string(),
+                "../work/.archive/202402_sa2a7_task/CURRENT_STATE.md".to_string()
+            ),
+            (
+                "../work/202402_sa2a7_task/img.md".to_string(),
+                "../work/.archive/202402_sa2a7_task/img.md".to_string()
+            ),
+            (
+                "../work/202402_sa2a7_task/CURRENT_STATE.md".to_string(),
+                "../work/.archive/202402_sa2a7_task/CURRENT_STATE.md".to_string()
+            ),
+        ],
+        "`from` must be the real destination bytes, never title or label bytes"
+    );
+
+    let applied = projected_write(tmp.path(), "sa2a7", ".archive", &plan_digest(&preview));
+    assert_eq!(applied["applied"], true, "{applied:#}");
+    assert_eq!(applied["complete"], true, "{applied:#}");
+    assert_eq!(
+        text_of(&source),
+        "[task](../work/.archive/202402_sa2a7_task/CURRENT_STATE.md \"see ](fake.md) here\")\n\
+![img](../work/.archive/202402_sa2a7_task/img.md \"also ](fake.md) here\")\n\
+\n\
+[a\\]: decoy]: ../work/.archive/202402_sa2a7_task/CURRENT_STATE.md\n",
+        "titles and labels must be byte-identical after apply"
+    );
+
+    // Perform the real move the plan was projected against, then verify the
+    // links independently of the projected planner.
+    fs::create_dir_all(tmp.path().join("work/.archive")).unwrap();
+    fs::rename(&owner, tmp.path().join("work/.archive/202402_sa2a7_task")).unwrap();
+    assert!(
+        tmp.path()
+            .join("work/.archive/202402_sa2a7_task/img.md")
+            .exists()
+    );
+
+    let reparsed = global_relink(tmp.path(), false);
+    assert_eq!(reparsed["complete"], true, "{reparsed:#}");
+    assert!(
+        reparsed["changes"].as_array().unwrap().is_empty(),
+        "every rewritten destination must still parse and resolve: {reparsed:#}"
+    );
+
+    let settled = projected_preview(tmp.path(), "sa2a7", ".archive");
+    assert_eq!(settled["projection"]["settled"], true);
+    assert_eq!(settled["complete"], true, "{settled:#}");
+    assert!(settled["changes"].as_array().unwrap().is_empty());
+    assert!(finding_codes(&settled).is_empty(), "{settled:#}");
+}
+
+#[test]
+fn relink_projected_ambiguous_destination_span_blocks_instead_of_guessing() {
+    let tmp = move_project();
+    let source = tmp.path().join("knowledge/ambiguous.md");
+    write_markdown(&source, AMBIGUOUS_MOVING_DESTINATION);
+
+    let preview = projected_preview(tmp.path(), "sa2a7", ".archive");
+    assert_eq!(preview["complete"], false, "{preview:#}");
+    assert_eq!(finding_codes(&preview), ["unreadable-entry"], "{preview:#}");
+    assert!(
+        preview["changes"].as_array().unwrap().is_empty(),
+        "an unprovable span must be reported, never guessed or silently dropped: {preview:#}"
+    );
+
+    // An incomplete plan refuses before the first file is opened, even with a
+    // matching digest.
+    let refused = projected_write(tmp.path(), "sa2a7", ".archive", &plan_digest(&preview));
+    assert_eq!(refused["applied"], false, "{refused:#}");
+    assert_eq!(refused["complete"], false, "{refused:#}");
+    assert!(refused["changes"].as_array().unwrap().is_empty());
+    assert_eq!(text_of(&source), AMBIGUOUS_MOVING_DESTINATION);
+}
+
+#[test]
+fn relink_projected_entity_encoded_destination_stays_a_resolvable_link() {
+    let tmp = move_project();
+    write_markdown(
+        &tmp.path().join("work/202402_sa2a7_task/file name.md"),
+        "# Spaced\n",
+    );
+    let source = tmp.path().join("knowledge/spaced.md");
+    write_markdown(&source, "[s](../work/202402_sa2a7_task/file&#32;name.md)\n");
+
+    let preview = projected_preview(tmp.path(), "sa2a7", ".archive");
+    assert_eq!(preview["complete"], true, "{preview:#}");
+    assert_eq!(
+        change_pairs(&preview),
+        [(
+            "../work/202402_sa2a7_task/file&#32;name.md".to_string(),
+            "../work/.archive/202402_sa2a7_task/file&#32;name.md".to_string(),
+        )],
+        "a decoded space must be re-encoded, not spliced in as a raw space"
+    );
+
+    let applied = projected_write(tmp.path(), "sa2a7", ".archive", &plan_digest(&preview));
+    assert_eq!(applied["complete"], true, "{applied:#}");
+    assert_eq!(
+        text_of(&source),
+        "[s](../work/.archive/202402_sa2a7_task/file&#32;name.md)\n"
+    );
+
+    fs::create_dir_all(tmp.path().join("work/.archive")).unwrap();
+    fs::rename(
+        tmp.path().join("work/202402_sa2a7_task"),
+        tmp.path().join("work/.archive/202402_sa2a7_task"),
+    )
+    .unwrap();
+    assert!(
+        tmp.path()
+            .join("work/.archive/202402_sa2a7_task/file name.md")
+            .exists()
+    );
+
+    let reparsed = global_relink(tmp.path(), false);
+    assert_eq!(reparsed["complete"], true, "{reparsed:#}");
+    assert!(
+        reparsed["changes"].as_array().unwrap().is_empty(),
+        "the rewritten destination must remain one link resolving to the moved file: {reparsed:#}"
+    );
+    let settled = projected_preview(tmp.path(), "sa2a7", ".archive");
+    assert_eq!(settled["complete"], true, "{settled:#}");
+    assert!(finding_codes(&settled).is_empty(), "{settled:#}");
+}
+
+#[test]
+fn relink_write_keeps_a_literal_ampersand_from_reparsing_as_an_entity() {
+    let tmp = typed_project();
+    let target = tmp.path().join("work/202402_sa2a7_task/a&copy;.md");
+    write_markdown(&target, "# Amp\n");
+    let source = tmp.path().join("knowledge/amp.md");
+    write_markdown(&source, "[c](../old/202402_sa2a7_old/a&amp;copy;.md)\n");
+
+    let preview = global_relink(tmp.path(), false);
+    assert_eq!(preview["complete"], true, "{preview:#}");
+    assert_eq!(
+        change_pairs(&preview),
+        [(
+            "../old/202402_sa2a7_old/a&amp;copy;.md".to_string(),
+            "../work/202402_sa2a7_task/a&amp;copy;.md".to_string(),
+        )],
+        "a literal ampersand must stay entity-encoded or the link silently retargets"
+    );
+
+    let written = global_relink(tmp.path(), true);
+    assert_eq!(written["complete"], true, "{written:#}");
+    assert_eq!(
+        text_of(&source),
+        "[c](../work/202402_sa2a7_task/a&amp;copy;.md)\n"
+    );
+
+    let reparsed = global_relink(tmp.path(), false);
+    assert_eq!(reparsed["complete"], true, "{reparsed:#}");
+    assert!(
+        reparsed["changes"].as_array().unwrap().is_empty(),
+        "{reparsed:#}"
+    );
+    assert!(finding_codes(&reparsed).is_empty(), "{reparsed:#}");
+    assert!(target.exists());
+    assert!(
+        !tmp.path()
+            .join("work/202402_sa2a7_task/a\u{a9}.md")
+            .exists(),
+        "the repaired destination must not decode to a different target"
+    );
+}
+
+#[test]
+fn relink_projected_settled_generic_destinations_are_verified_by_resolution() {
+    let tmp = move_project();
+    let staged = tmp.path().join("work/202402_sa2a7_task");
+    write_markdown(&staged.join("assets/plain.md"), "# Plain\n");
+    write_markdown(&staged.join("sub/deep.md"), "# Deep\n");
+    // Two embedded refs keep this out of identity-backed resolution.
+    write_markdown(&staged.join("202404_sd5d2_other.md"), "# Multi\n");
+
+    // Settle the projection by performing the move, as close verification and a
+    // retry after a lost response both do.
+    fs::create_dir_all(tmp.path().join("work/.archive")).unwrap();
+    fs::rename(&staged, tmp.path().join("work/.archive/202402_sa2a7_task")).unwrap();
+    let owner = tmp.path().join("work/.archive/202402_sa2a7_task");
+    let refless = owner.join("refless.md");
+    let multiref = tmp.path().join("knowledge/multiref.md");
+
+    // Canonical spellings are clean, as they always were.
+    write_markdown(&refless, "[p](assets/plain.md)\n");
+    write_markdown(
+        &multiref,
+        "[m](../work/.archive/202402_sa2a7_task/202404_sd5d2_other.md)\n",
+    );
+    let canonical = projected_preview(tmp.path(), "sa2a7", ".archive");
+    assert_eq!(canonical["projection"]["settled"], true);
+    assert_eq!(canonical["complete"], true, "{canonical:#}");
+    assert!(canonical["changes"].as_array().unwrap().is_empty());
+    assert!(finding_codes(&canonical).is_empty(), "{canonical:#}");
+
+    // Resolving-but-noncanonical spellings are also clean. Slopid normalizes
+    // generic destinations in no mode, so requiring canonical text here would
+    // demand a spelling it cannot write, and the refusal would only appear after
+    // the caller's irreversible rename. These are ordinary authored forms.
+    for spelling in [
+        "[p](./assets/plain.md)\n",
+        "[p](assets/../assets/plain.md)\n",
+        "[p](sub/)\n",
+        "[p](./sub/deep.md)\n",
+    ] {
+        write_markdown(&refless, spelling);
+        let settled = projected_preview(tmp.path(), "sa2a7", ".archive");
+        assert_eq!(
+            settled["complete"], true,
+            "a resolving generic spelling must verify clean: {spelling:?} -> {settled:#}"
+        );
+        assert!(
+            finding_codes(&settled).is_empty(),
+            "{spelling:?} -> {settled:#}"
+        );
+        assert!(settled["changes"].as_array().unwrap().is_empty());
+    }
+
+    // The multi-ref path behaves identically.
+    write_markdown(&refless, "[p](assets/plain.md)\n");
+    write_markdown(
+        &multiref,
+        "[m](../work/.archive/202402_sa2a7_task/../202402_sa2a7_task/202404_sd5d2_other.md)\n",
+    );
+    let multiref_noncanonical = projected_preview(tmp.path(), "sa2a7", ".archive");
+    assert_eq!(
+        multiref_noncanonical["complete"], true,
+        "{multiref_noncanonical:#}"
+    );
+    assert!(
+        finding_codes(&multiref_noncanonical).is_empty(),
+        "{multiref_noncanonical:#}"
+    );
+
+    // A destination that resolves to nothing stays visible and digest-bound, but
+    // does not turn settled verification into a corpus-health gate.
+    write_markdown(
+        &multiref,
+        "[m](../work/.archive/202402_sa2a7_task/202404_sd5d2_gone.md)\n",
+    );
+    let missing = projected_preview(tmp.path(), "sa2a7", ".archive");
+    assert_eq!(missing["complete"], true, "{missing:#}");
+    assert!(missing["changes"].as_array().unwrap().is_empty());
+    let root = fs::canonicalize(tmp.path()).unwrap();
+    let message = format!(
+        "local destination does not resolve: {}",
+        root.join("work/.archive/202402_sa2a7_task/202404_sd5d2_gone.md")
+            .display(),
+    );
+    assert_unresolved_local_warning(&missing, &multiref, 1, &message);
+}
+
+#[test]
+fn relink_projected_refuses_an_unknown_destination_inspection_error() {
+    let tmp = move_project();
+    // A regular file where the destination root must be makes the projected
+    // owner's state unknowable rather than proven absent.
+    fs::write(tmp.path().join("work/.archive"), "not a directory\n").unwrap();
+    let to_owner = tmp.path().join("work/.archive/202402_sa2a7_task");
+    let kind = to_owner.symlink_metadata().err().map(|err| err.kind());
+    assert!(
+        matches!(kind, Some(kind) if kind != std::io::ErrorKind::NotFound),
+        "fixture must fail inspection with something other than NotFound: {kind:?}"
+    );
+    let inbound = tmp.path().join("knowledge/inbound.md");
+    write_markdown(
+        &inbound,
+        "[a](../work/202402_sa2a7_task/CURRENT_STATE.md)\n",
+    );
+    let before = text_of(&inbound);
+
+    for arguments in [
+        vec!["relink", "--move", "sa2a7", "--into", ".archive"],
+        vec![
+            "relink",
+            "--move",
+            "sa2a7",
+            "--into",
+            ".archive",
+            "--write",
+            "--expected-plan-sha256",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ],
+    ] {
+        let output = sid()
+            .args(&arguments)
+            .current_dir(tmp.path())
+            .assert()
+            .failure()
+            .get_output()
+            .clone();
+        assert!(
+            output.stdout.is_empty(),
+            "an unknown destination state must refuse before result JSON: {arguments:?}"
+        );
+        assert_eq!(text_of(&inbound), before);
+    }
+}
+
+#[test]
+fn relink_projected_scan_issues_follow_the_move_effect_boundary() {
+    // Relevant: the ambiguous destination names the moving owner, so it must
+    // block completeness and bind its source bytes into the digest.
+    let relevant = move_project();
+    let blocking = relevant.path().join("knowledge/blocking.md");
+    write_markdown(&blocking, AMBIGUOUS_MOVING_DESTINATION);
+    let first = projected_preview(relevant.path(), "sa2a7", ".archive");
+    assert_eq!(first["complete"], false, "{first:#}");
+    assert_eq!(finding_codes(&first), ["unreadable-entry"], "{first:#}");
+    let before = plan_digest(&first);
+    write_markdown(
+        &blocking,
+        &format!("{AMBIGUOUS_MOVING_DESTINATION}\nLater prose.\n"),
+    );
+    let after = projected_preview(relevant.path(), "sa2a7", ".archive");
+    assert_eq!(finding_codes(&after), ["unreadable-entry"], "{after:#}");
+    assert_ne!(
+        plan_digest(&after),
+        before,
+        "a relevant unlocatable destination must bind its source into authority"
+    );
+
+    // Unrelated: the same construct, but neither its target id nor its source
+    // is part of this move. It must not block or perturb authority.
+    let unrelated = move_project();
+    let baseline = plan_digest(&projected_preview(unrelated.path(), "sa2a7", ".archive"));
+    write_markdown(
+        &unrelated.path().join("knowledge/unrelated.md"),
+        AMBIGUOUS_UNRELATED_DESTINATION,
+    );
+    let with_issue = projected_preview(unrelated.path(), "sa2a7", ".archive");
+    assert_eq!(with_issue["complete"], true, "{with_issue:#}");
+    assert!(finding_codes(&with_issue).is_empty(), "{with_issue:#}");
+    assert_eq!(
+        plan_digest(&with_issue),
+        baseline,
+        "an unrelated scan issue must not widen projected authority"
+    );
+}
+
+#[test]
+fn relink_global_ignores_a_scan_issue_outside_its_recognized_ref_authority() {
+    let tmp = typed_project();
+    write_markdown(&tmp.path().join("knowledge/assets/plain.md"), "# Plain\n");
+    // An unprovable span whose semantic destination carries no recognized ref:
+    // global repair never had authority over it, located or not.
+    write_markdown(
+        &tmp.path().join("knowledge/generic.md"),
+        "[p](assets/plain.md \"t](assets/plain.md t\")\n",
+    );
+    let preview = global_relink(tmp.path(), false);
+    assert_eq!(preview["complete"], true, "{preview:#}");
+    assert!(finding_codes(&preview).is_empty(), "{preview:#}");
+    assert!(preview["changes"].as_array().unwrap().is_empty());
+
+    // The same construct naming a recognized ref *is* in authority and blocks.
+    write_markdown(
+        &tmp.path().join("knowledge/recognized.md"),
+        "[t](../old/202402_sa2a7_old/CURRENT_STATE.md \"t](../old/202402_sa2a7_old/CURRENT_STATE.md t\")\n",
+    );
+    let blocked = global_relink(tmp.path(), false);
+    assert_eq!(blocked["complete"], false, "{blocked:#}");
+    assert_eq!(finding_codes(&blocked), ["unreadable-entry"], "{blocked:#}");
+    assert!(
+        blocked["changes"].as_array().unwrap().is_empty(),
+        "{blocked:#}"
+    );
+}
+
+/// Operator prose is line-wrapped for display, so assert on content rather than
+/// on where a wrap happens to fall.
+fn unwrapped(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[test]
+fn relink_help_and_agent_instructions_state_the_bounded_quiescence_contract() {
+    let help = unwrapped(
+        &String::from_utf8(
+            sid()
+                .args(["relink", "--help"])
+                .assert()
+                .success()
+                .get_output()
+                .stdout
+                .clone(),
+        )
+        .unwrap(),
+    );
+    assert!(
+        help.contains("quiescent authored-source window"),
+        "relink help must state the caller's quiescence duty: {help}"
+    );
+    assert!(
+        help.contains("Slopid does not detect or lease writers"),
+        "relink help must not imply Slopid enforces quiescence: {help}"
+    );
+    assert!(
+        help.contains("it is not a lock, lease, or compare-and-swap"),
+        "relink help must not imply the byte check is a lease: {help}"
+    );
+    assert!(
+        help.contains("after that check and before atomic replacement is overwritten"),
+        "relink help must name the accepted residual race: {help}"
+    );
+
+    let instructions = String::from_utf8(
+        sid()
+            .arg("agent-instructions")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone(),
+    )
+    .unwrap();
+    let instructions = unwrapped(json(instructions.as_bytes())["text"].as_str().unwrap());
+    assert!(
+        instructions.contains("Keep authored Markdown writers quiescent"),
+        "agent instructions must state the quiescence requirement: {instructions}"
+    );
+    assert!(
+        instructions.contains("never detects or leases authored writers"),
+        "agent instructions must not imply Slopid enforces quiescence: {instructions}"
+    );
+    assert!(
+        instructions.contains("after that check and before atomic replacement is overwritten"),
+        "agent instructions must name the accepted residual race: {instructions}"
+    );
+    // The proven-representation boundary is part of the operator contract too.
+    assert!(
+        instructions.contains("proven to decode to it"),
+        "agent instructions must state the span proof: {instructions}"
+    );
+    assert!(
+        instructions.contains("Every destination inside the move effect set"),
+        "agent instructions must scope the span proof to move authority: {instructions}"
+    );
+    assert!(
+        !instructions.contains("Every local destination in coverage"),
+        "agent instructions must not claim corpus-wide span authority: {instructions}"
+    );
+    assert!(
+        instructions.contains("canonical text only for recognized refs"),
+        "agent instructions must state which destinations canonicality applies to: {instructions}"
+    );
+    assert!(
+        instructions.contains("verifies generic paths by whether they resolve"),
+        "agent instructions must state the generic settled rule: {instructions}"
+    );
+    // The superseded symmetric rule must not reappear on any operator surface.
+    // A presence-only assertion previously locked this obsolete sentence in place,
+    // so drift detection ran backwards.
+    for surface in [&help, &instructions] {
+        assert!(
+            !surface.contains("canonical text for generic paths too")
+                && !surface.contains("canonical text for generic ref-less"),
+            "an operator surface must not state the superseded symmetric \
+             canonicality rule: {surface}"
+        );
+    }
+
+    // Presence assertions alone would let an *added* overclaim pass. The byte
+    // check is not protection against concurrent edit loss, so no operator
+    // surface may say that it is.
+    for surface in [&help, &instructions] {
+        let lowered = surface.to_lowercase();
+        for overclaim in [
+            "prevents concurrent",
+            "protects against concurrent",
+            "prevents all concurrent",
+            "guarantees no concurrent",
+            "safe from concurrent",
+            "locks the file",
+            "is a compare-and-swap",
+        ] {
+            assert!(
+                !lowered.contains(overclaim),
+                "an operator surface must not claim {overclaim:?}: {surface}"
+            );
+        }
+    }
+}
+
+/// An ambiguous-span construct whose destination carries two recognized refs, so
+/// it is resolved by generic lexical path authority rather than by identity.
+const AMBIGUOUS_MULTIREF_INSIDE: &str = "[m](../work/202402_sa2a7_task/202404_sd5d2_other.md \"t](../work/202402_sa2a7_task/202404_sd5d2_other.md t\")\n";
+
+/// The same shape, but naming a path outside the moving owner.
+const AMBIGUOUS_MULTIREF_OUTSIDE: &str = "[m](../work/202404_sd5d2_other/202401_816d_x.md \"t](../work/202404_sd5d2_other/202401_816d_x.md t\")\n";
+
+#[test]
+fn relink_projected_destination_ending_in_a_backslash_keeps_its_title() {
+    let tmp = move_project();
+    let owner = tmp.path().join("work/202402_sa2a7_task");
+    // A legal target name ending in a literal backslash. CommonMark escapes only
+    // ASCII punctuation, so `\` before the destination's terminating space is
+    // literal content and the space still ends the destination.
+    write_markdown(&owner.join("note\\"), "# Note\n");
+    let source = tmp.path().join("knowledge/backslash.md");
+    write_markdown(
+        &source,
+        "[a](../work/202402_sa2a7_task/note\\ \"t](x.md t\")\n",
+    );
+
+    let preview = projected_preview(tmp.path(), "sa2a7", ".archive");
+    assert_eq!(preview["complete"], true, "{preview:#}");
+    assert!(finding_codes(&preview).is_empty(), "{preview:#}");
+    assert_eq!(
+        change_pairs(&preview),
+        [(
+            "../work/202402_sa2a7_task/note\\".to_string(),
+            "../work/.archive/202402_sa2a7_task/note\\\\".to_string(),
+        )],
+        "the span must stop at the destination, not run through the title"
+    );
+
+    let applied = projected_write(tmp.path(), "sa2a7", ".archive", &plan_digest(&preview));
+    assert_eq!(applied["complete"], true, "{applied:#}");
+    assert_eq!(
+        text_of(&source),
+        "[a](../work/.archive/202402_sa2a7_task/note\\\\ \"t](x.md t\")\n",
+        "the authored title must survive byte-identically"
+    );
+
+    fs::create_dir_all(tmp.path().join("work/.archive")).unwrap();
+    fs::rename(&owner, tmp.path().join("work/.archive/202402_sa2a7_task")).unwrap();
+    let reparsed = global_relink(tmp.path(), false);
+    assert_eq!(reparsed["complete"], true, "{reparsed:#}");
+    assert!(
+        reparsed["changes"].as_array().unwrap().is_empty(),
+        "{reparsed:#}"
+    );
+    assert!(
+        tmp.path()
+            .join("work/.archive/202402_sa2a7_task/note\\")
+            .exists()
+    );
+}
+
+#[test]
+fn relink_refuses_a_replacement_that_would_change_how_the_file_parses() {
+    let tmp = move_project();
+    // Give the owner a folder name containing `)`, so its canonical destination
+    // carries one. In angle form parentheses are ordinary content and are
+    // deliberately not escaped.
+    let owner = tmp.path().join("work/202402_sa2a7_ta)sk");
+    fs::rename(tmp.path().join("work/202402_sa2a7_task"), &owner).unwrap();
+
+    let source = tmp.path().join("knowledge/rebalance.md");
+    // One well-formed angle link preceded by a malformed `[y](` whose parens
+    // never balance. Splicing a `)` into the destination balances the earlier
+    // construct, which then swallows this link and retargets it.
+    let authored = "[y](][a](<../old/202402_sa2a7_old/CURRENT_STATE.md>):x\n";
+    write_markdown(&source, authored);
+
+    let preview = global_relink(tmp.path(), false);
+    assert_eq!(
+        preview["complete"], false,
+        "a replacement that changes the file's parse must not be planned: {preview:#}"
+    );
+    assert!(
+        preview["changes"].as_array().unwrap().is_empty(),
+        "{preview:#}"
+    );
+    assert!(
+        finding_codes(&preview).contains(&"unreadable-entry"),
+        "{preview:#}"
+    );
+
+    let written = global_relink(tmp.path(), true);
+    assert_eq!(written["complete"], false, "{written:#}");
+    assert_eq!(
+        text_of(&source),
+        authored,
+        "no authored byte may change when the whole-file proof fails"
+    );
+
+    // The same destination in a file without the malformed prefix is still
+    // repaired, so this is a targeted refusal rather than a blanket one.
+    let clean = tmp.path().join("knowledge/clean.md");
+    fs::remove_file(&source).unwrap();
+    write_markdown(&clean, "[a](<../old/202402_sa2a7_old/CURRENT_STATE.md>)\n");
+    let repaired = global_relink(tmp.path(), false);
+    assert_eq!(repaired["complete"], true, "{repaired:#}");
+    assert_eq!(
+        change_pairs(&repaired),
+        [(
+            "../old/202402_sa2a7_old/CURRENT_STATE.md".to_string(),
+            "../work/202402_sa2a7_ta)sk/CURRENT_STATE.md".to_string(),
+        )],
+        "{repaired:#}"
+    );
+}
+
+#[test]
+fn relink_projected_generic_relevance_boundary_is_exercised_by_tests() {
+    // Relevant: the unlocatable destination is multi-ref, so only the generic
+    // lexical boundary can decide it, and its current candidate lies under the
+    // moving owner.
+    let relevant = move_project();
+    write_markdown(
+        &relevant
+            .path()
+            .join("work/202402_sa2a7_task/202404_sd5d2_other.md"),
+        "# Multi\n",
+    );
+    let blocking = relevant.path().join("knowledge/multiref-blocking.md");
+    write_markdown(&blocking, AMBIGUOUS_MULTIREF_INSIDE);
+    let first = projected_preview(relevant.path(), "sa2a7", ".archive");
+    assert_eq!(first["complete"], false, "{first:#}");
+    assert_eq!(finding_codes(&first), ["unreadable-entry"], "{first:#}");
+    let before = plan_digest(&first);
+    write_markdown(
+        &blocking,
+        &format!("{AMBIGUOUS_MULTIREF_INSIDE}\nLater prose.\n"),
+    );
+    assert_ne!(
+        plan_digest(&projected_preview(relevant.path(), "sa2a7", ".archive")),
+        before,
+        "a relevant generic scan issue must bind its source into authority"
+    );
+
+    // Unrelated: identical shape, but the destination names another owner.
+    let unrelated = move_project();
+    let baseline = plan_digest(&projected_preview(unrelated.path(), "sa2a7", ".archive"));
+    write_markdown(
+        &unrelated.path().join("knowledge/multiref-unrelated.md"),
+        AMBIGUOUS_MULTIREF_OUTSIDE,
+    );
+    let with_issue = projected_preview(unrelated.path(), "sa2a7", ".archive");
+    assert_eq!(with_issue["complete"], true, "{with_issue:#}");
+    assert!(finding_codes(&with_issue).is_empty(), "{with_issue:#}");
+    assert_eq!(
+        plan_digest(&with_issue),
+        baseline,
+        "a generic scan issue outside the effect set must not widen authority"
+    );
+}
+
+#[test]
+fn relink_projected_generic_projected_candidate_must_survive_the_projection() {
+    let tmp = move_project();
+    // A multi-ref destination authored inside the moving owner whose current
+    // candidate does not exist, but whose authored-after path lands back under
+    // the *current* owner and does exist. Treating that as an already-forward
+    // retry would report a broken link as settled.
+    write_markdown(
+        &tmp.path().join("work/202402_sa2a7_task/202404_sd5d2_x.md"),
+        "# Target\n",
+    );
+    let source = tmp.path().join("work/202402_sa2a7_task/g.md");
+    write_markdown(&source, "[g](../../202402_sa2a7_task/202404_sd5d2_x.md)\n");
+
+    let preview = projected_preview(tmp.path(), "sa2a7", ".archive");
+    assert_eq!(
+        preview["complete"], false,
+        "an authored-after path that does not project back is not a forward retry: {preview:#}"
+    );
+    assert_eq!(
+        finding_codes(&preview),
+        ["relink-projection-drift"],
+        "{preview:#}"
+    );
+    assert!(
+        preview["changes"].as_array().unwrap().is_empty(),
+        "{preview:#}"
+    );
+}
+
+#[test]
+fn relink_reports_an_unresolvable_internal_target_as_unknown_not_absent() {
+    let tmp = typed_project();
+    let owner = tmp.path().join("work/202402_sa2a7_task");
+    // A mutual symlink loop: the entry exists, but resolving it fails. Reading
+    // that error as absence made relink assert something untrue and let global
+    // relink skip the repair while reporting complete.
+    std::os::unix::fs::symlink(owner.join("loop_b"), owner.join("loop_a")).unwrap();
+    std::os::unix::fs::symlink(owner.join("loop_a"), owner.join("loop_b")).unwrap();
+    assert!(
+        owner.join("loop_a").symlink_metadata().is_ok() && owner.join("loop_a").metadata().is_err(),
+        "fixture must be an existing entry that cannot be resolved"
+    );
+    let source = tmp.path().join("knowledge/loop.md");
+    write_markdown(&source, "[l](../old/202402_sa2a7_old/loop_a)\n");
+
+    let preview = global_relink(tmp.path(), false);
+    assert_eq!(
+        preview["complete"], false,
+        "unproven target state is a coverage failure: {preview:#}"
+    );
+    assert_eq!(finding_codes(&preview), ["unreadable-entry"], "{preview:#}");
+    assert!(preview["changes"].as_array().unwrap().is_empty());
+
+    // A genuinely absent target must still be reported as absent, and must still
+    // leave a usable scan complete.
+    write_markdown(&source, "[m](../old/202402_sa2a7_old/gone.md)\n");
+    let absent = global_relink(tmp.path(), false);
+    assert_eq!(absent["complete"], true, "{absent:#}");
+    assert_eq!(
+        finding_codes(&absent),
+        ["relink-missing-internal-target"],
+        "{absent:#}"
+    );
+}
+
+#[test]
+fn relink_projected_refuses_a_replacement_that_would_change_how_the_file_parses() {
+    let tmp = tempfile::tempdir().unwrap();
+    // The destination *root* carries the `)`, not the owner. So the authored
+    // destination parses cleanly today and only the projected replacement
+    // introduces a parenthesis — which is what makes this a projected-path test
+    // rather than a restatement of the global one.
+    fs::write(
+        tmp.path().join(".sid"),
+        "[task]\nroot = \"work\"\nscan_roots = [\"work/.arc)hive\"]\n[seed]\nroot = \"parking\"\n[note]\nroot = \"scratch/notes\"\n[topic]\nroots = [\"knowledge\"]\n",
+    )
+    .unwrap();
+    write_canonical(
+        &tmp.path().join("work/202402_sa2a7_task/CURRENT_STATE.md"),
+        "type: \"task\"\nid: \"sa2a7\"\ntitle: \"Task\"\ntimestamp: \"2024-02-01\"\n",
+        "",
+    );
+
+    let source = tmp.path().join("knowledge/rebalance.md");
+    // A well-formed angle link at its current canonical spelling, preceded by a
+    // malformed `[y](` whose parentheses never balance. Splicing the projected
+    // destination's `)` balances that prefix, which then swallows this link.
+    let authored = "[y](][a](<../work/202402_sa2a7_task/CURRENT_STATE.md>):x\n";
+    write_markdown(&source, authored);
+
+    let preview = projected_preview(tmp.path(), "sa2a7", ".arc)hive");
+    assert_eq!(
+        preview["complete"], false,
+        "the projected planner must refuse a replacement that changes the file's parse: {preview:#}"
+    );
+    assert!(
+        preview["changes"].as_array().unwrap().is_empty(),
+        "{preview:#}"
+    );
+    assert!(
+        finding_codes(&preview).contains(&"unreadable-entry"),
+        "{preview:#}"
+    );
+
+    // An incomplete plan refuses before any file is opened, even with a matching
+    // digest, so no authored byte may change.
+    let refused = projected_write(tmp.path(), "sa2a7", ".arc)hive", &plan_digest(&preview));
+    assert_eq!(refused["applied"], false, "{refused:#}");
+    assert_eq!(refused["complete"], false, "{refused:#}");
+    assert_eq!(text_of(&source), authored);
+
+    // The same destination without the malformed prefix is still repaired, so the
+    // projected refusal is targeted rather than blanket.
+    let clean = tmp.path().join("knowledge/clean.md");
+    fs::remove_file(&source).unwrap();
+    write_markdown(
+        &clean,
+        "[a](<../work/202402_sa2a7_task/CURRENT_STATE.md>)\n",
+    );
+    let repaired = projected_preview(tmp.path(), "sa2a7", ".arc)hive");
+    assert_eq!(repaired["complete"], true, "{repaired:#}");
+    assert_eq!(
+        change_pairs(&repaired),
+        [(
+            "../work/202402_sa2a7_task/CURRENT_STATE.md".to_string(),
+            "../work/.arc)hive/202402_sa2a7_task/CURRENT_STATE.md".to_string(),
+        )],
+        "{repaired:#}"
+    );
 }

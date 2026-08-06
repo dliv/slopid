@@ -168,9 +168,11 @@ labels, and ordinary prose are not.
 A Markdown destination remains a literal path by default; Markdown does not
 assign line-navigation meaning to a suffix such as `:33`. When the project
 enables the `colon-line` destination extension, relink recognizes exactly a
-terminal `:[1-9][0-9]*` on an otherwise local destination. It first checks the
-canonical literal path including that suffix. Only when the literal target does
-not exist does it check the canonical base path without the suffix. A proven
+terminal `:[1-9][0-9]*` on an otherwise local destination whose base does not
+end in `/`. A separator-ended spelling such as `assets/:33` remains one ordinary
+literal path. For a recognized locator, relink first checks the canonical
+literal path including that suffix. Only when the literal target does not exist
+does it check the canonical base path without the suffix. A proven
 replacement preserves the exact locator before any following fragment. Relink
 does not count target lines or validate editor navigation. External
 destinations, including URLs with ports, never enter extension handling. If

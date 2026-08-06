@@ -15,10 +15,12 @@ use std::path::{Path, PathBuf};
 
 use super::{
     PlannedFile, RelinkChange, RelinkPlan, RelinkProjection, RelinkResult, Replacement,
-    TargetResolution, apply_plan_with, atomic_replace, canonical_destination_text, compare_changes,
-    has_overlapping_spans, missing_target_path, normalize, parse_destination_ref,
-    parse_local_destination, push_candidate_finding, render_destination_text, resolve_target_path,
-    scan_relink_sources, source_parent_of, unresolved_ref_finding_code, unresolved_ref_message,
+    TargetPresence, TargetResolution, apply_plan_with, atomic_replace, canonical_destination_text,
+    compare_changes, has_overlapping_spans, normalize, parse_destination_ref,
+    parse_local_destination, push_candidate_finding, render_destination_text,
+    render_failure_finding, resolve_target_path, scan_relink_sources, source_parent_of,
+    splice_preserves_destinations, target_presence, unknown_target_finding,
+    unresolved_ref_finding_code, unresolved_ref_message,
 };
 use crate::commands::ProjectConfig;
 use crate::commands::new::resolve_destination_root;
@@ -68,6 +70,9 @@ enum ProjectedOutcome {
     Irrelevant,
     /// In the effect set and already correct, or unaffected by the move.
     Unchanged,
+    /// In approval scope with a warning, but no replacement or completeness
+    /// failure. The source bytes and finding still bind the plan digest.
+    Advisory,
     /// In the effect set but not safely planable; a finding was recorded.
     Blocked,
     Planned(Replacement),
@@ -80,6 +85,72 @@ struct GenericProjection {
     projected_candidate: PathBuf,
     current_valid: bool,
     projected_valid: bool,
+}
+
+/// The three lexical readings of one generic local destination that decide both
+/// relevance and planning. Shared so a destination whose raw span could not be
+/// located is scoped by exactly the same boundary as one that was located.
+#[derive(Debug)]
+struct GenericCandidates {
+    future_source_parent: PathBuf,
+    current_candidate: PathBuf,
+    authored_after: PathBuf,
+    projected_candidate: PathBuf,
+}
+
+fn generic_candidates(
+    source_parent: &Path,
+    resolution_path_text: &str,
+    projection: &RelinkProjection,
+) -> GenericCandidates {
+    let future_source_parent = project_path(source_parent, projection);
+    let current_candidate = normalize(&source_parent.join(Path::new(resolution_path_text)));
+    let authored_after = normalize(&future_source_parent.join(Path::new(resolution_path_text)));
+    let projected_candidate = unproject_path(&authored_after, projection);
+    GenericCandidates {
+        future_source_parent,
+        current_candidate,
+        authored_after,
+        projected_candidate,
+    }
+}
+
+impl GenericCandidates {
+    fn is_relevant(&self, projection: &RelinkProjection, source_moves: bool) -> bool {
+        source_moves
+            || self.current_candidate.starts_with(&projection.from_owner)
+            || self.authored_after.starts_with(&projection.to_owner)
+            || self.projected_candidate.starts_with(&projection.from_owner)
+    }
+}
+
+/// Is this semantic destination inside the move effect set?
+///
+/// A destination whose raw span could not be proven still has an identity, and
+/// that identity must pass the same boundary a located destination would. An
+/// unrelated parse failure must neither block this move nor perturb its
+/// approval digest; only a relevant one may.
+fn projected_destination_is_relevant(
+    source: &Path,
+    resolved: &str,
+    destination_extensions: &[super::RelinkDestinationExtension],
+    projection: &RelinkProjection,
+    source_moves: bool,
+) -> bool {
+    if let Some(parsed) = parse_destination_ref(resolved, destination_extensions) {
+        return source_moves || parsed.target_id == projection.id;
+    }
+    let Some(parsed) = parse_local_destination(resolved, destination_extensions) else {
+        // Empty, fragment-only, external, and protocol-relative destinations are
+        // outside every local authority, located or not.
+        return false;
+    };
+    generic_candidates(
+        source_parent_of(source),
+        parsed.resolution_path_text,
+        projection,
+    )
+    .is_relevant(projection, source_moves)
 }
 
 pub(super) fn cmd_relink_move(
@@ -160,9 +231,42 @@ fn plan_move_relink(config: &ProjectConfig, move_id: &str, into: &str) -> Result
         };
 
         let source_moves = path.starts_with(&projection.from_owner);
+        let scan = markdown::destinations(text);
         let mut replacements = Vec::new();
         let mut in_effect_set = false;
-        for destination in markdown::destinations(text) {
+        // A destination the parser saw but whose replaceable bytes could not be
+        // proven is only *this command's* problem when it is inside the move
+        // effect set. Then it must block, bind its source into authority, and
+        // never leave an empty change list looking like clean convergence.
+        for issue in &scan.issues {
+            if !projected_destination_is_relevant(
+                &path,
+                &issue.resolved,
+                &config.relink_destination_extensions,
+                &projection,
+                source_moves,
+            ) {
+                continue;
+            }
+            in_effect_set = true;
+            complete = false;
+            let mut finding = Finding::error(
+                FindingCode::UnreadableEntry,
+                format!(
+                    "cannot locate the replaceable bytes of a move-scoped destination: {}",
+                    issue.message
+                ),
+                Some(path.clone()),
+            );
+            // The line is the construct's, because an unlocatable destination has
+            // no span of its own to report.
+            finding.line = Some(issue.line);
+            finding.id =
+                parse_destination_ref(&issue.resolved, &config.relink_destination_extensions)
+                    .map(|parsed| parsed.target_id);
+            findings.push(finding);
+        }
+        for destination in scan.destinations.iter().cloned() {
             let outcome = resolve_projected_destination(
                 &path,
                 destination,
@@ -175,6 +279,7 @@ fn plan_move_relink(config: &ProjectConfig, move_id: &str, into: &str) -> Result
             match outcome {
                 ProjectedOutcome::Irrelevant => {}
                 ProjectedOutcome::Unchanged => in_effect_set = true,
+                ProjectedOutcome::Advisory => in_effect_set = true,
                 ProjectedOutcome::Blocked => {
                     in_effect_set = true;
                     complete = false;
@@ -191,6 +296,21 @@ fn plan_move_relink(config: &ProjectConfig, move_id: &str, into: &str) -> Result
             findings.push(Finding::error(
                 FindingCode::UnreadableEntry,
                 "overlapping Markdown destination spans cannot be safely planned",
+                Some(path.clone()),
+            ));
+            replacements.clear();
+        }
+        if !replacements.is_empty()
+            && !splice_preserves_destinations(&scanned, &scan, &replacements)
+        {
+            // The move-scoped replacements are individually proven, but together
+            // they would change how this file parses. Refuse the file rather
+            // than approve a mutation whose effect nobody verified.
+            in_effect_set = true;
+            complete = false;
+            findings.push(Finding::error(
+                FindingCode::UnreadableEntry,
+                "planned replacements would change how this file parses, so no repair here is safe",
                 Some(path.clone()),
             ));
             replacements.clear();
@@ -239,6 +359,27 @@ fn plan_move_relink(config: &ProjectConfig, move_id: &str, into: &str) -> Result
     })
 }
 
+/// What inspecting the projected owner path actually established.
+#[derive(Debug, PartialEq, Eq)]
+enum ProjectedDestinationState {
+    /// Some filesystem entry is already there, of any type.
+    Occupied,
+    /// Proven absent. Only `NotFound` establishes this.
+    Absent,
+    /// Neither proven present nor proven absent: a permission failure or any
+    /// other I/O error. Treating this as absence let a scoped write rewrite
+    /// every inbound link before an impossible rename.
+    Unknown(std::io::ErrorKind),
+}
+
+fn classify_projected_destination<T>(inspection: &std::io::Result<T>) -> ProjectedDestinationState {
+    match inspection {
+        Ok(_) => ProjectedDestinationState::Occupied,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => ProjectedDestinationState::Absent,
+        Err(err) => ProjectedDestinationState::Unknown(err.kind()),
+    }
+}
+
 /// Resolve one exact stable id and one configured root into a projected owner.
 /// A caller may never supply an arbitrary future filesystem path: the
 /// destination is always a configured root plus the owner's unchanged basename.
@@ -270,15 +411,31 @@ fn resolve_projection(
     }
     let to_owner = root.join(basename);
     let settled = to_owner == from_owner;
-    // `exists()` follows symlinks, so a dangling symlink at the destination would
-    // pass this guard, the scoped write would apply, and the caller's later
-    // rename would then fail with the links already pointing at a location the
-    // move cannot reach. Ask about the entry itself, as `config.rs` does.
-    if !settled && to_owner.symlink_metadata().is_ok() {
-        bail!(
-            "projected move destination already exists: {}",
-            to_owner.display()
-        );
+    if !settled {
+        // `exists()` follows symlinks, so a dangling symlink at the destination
+        // would pass this guard, the scoped write would apply, and the caller's
+        // later rename would then fail with the links already pointing at a
+        // location the move cannot reach. Ask about the entry itself, as
+        // `config.rs` does — and only `NotFound` proves it absent.
+        let inspection = to_owner.symlink_metadata();
+        match classify_projected_destination(&inspection) {
+            ProjectedDestinationState::Occupied => bail!(
+                "projected move destination already exists: {}",
+                to_owner.display()
+            ),
+            ProjectedDestinationState::Absent => {}
+            ProjectedDestinationState::Unknown(_) => {
+                // `Unknown` is only produced from an error, so this cannot panic.
+                let err = inspection
+                    .expect_err("an unknown destination state implies an inspection error");
+                return Err(err).with_context(|| {
+                    format!(
+                        "cannot determine whether projected move destination {} exists",
+                        to_owner.display()
+                    )
+                });
+            }
+        }
     }
     Ok(RelinkProjection {
         id: move_id.to_string(),
@@ -347,19 +504,32 @@ fn resolve_projected_destination(
     };
     // The future owner legitimately does not exist yet, but the current target
     // must, or the plan is guessing about what it is repairing.
-    if let Some(missing_target) = missing_target_path(&target, parsed.locator) {
-        push_candidate_finding(
-            findings,
-            FindingCode::RelinkMissingInternalTarget,
-            format!(
-                "preserved internal target does not exist: {}",
-                missing_target.display()
-            ),
-            source,
-            &target_id,
-            destination.line,
-        );
-        return ProjectedOutcome::Blocked;
+    match target_presence(&target, parsed.locator) {
+        TargetPresence::Present => {}
+        TargetPresence::Absent(missing_target) => {
+            push_candidate_finding(
+                findings,
+                FindingCode::RelinkMissingInternalTarget,
+                format!(
+                    "preserved internal target does not exist: {}",
+                    missing_target.display()
+                ),
+                source,
+                &target_id,
+                destination.line,
+            );
+            return ProjectedOutcome::Blocked;
+        }
+        TargetPresence::Unknown(path, err) => {
+            findings.push(unknown_target_finding(
+                source,
+                &path,
+                &err,
+                destination.line,
+                Some(&target_id),
+            ));
+            return ProjectedOutcome::Blocked;
+        }
     }
 
     let source_parent = source_parent_of(source);
@@ -409,9 +579,23 @@ fn resolve_projected_destination(
         return ProjectedOutcome::Unchanged;
     }
     if resolved == current {
-        let rendered = render_destination_text(&projected, destination.form);
+        let rendered = match render_destination_text(&projected, destination.form) {
+            Ok(rendered) => rendered,
+            Err(err) => {
+                // Never construct a partial replacement: unprovable bytes must
+                // not reach the digest or the writer.
+                findings.push(render_failure_finding(
+                    &err,
+                    source,
+                    destination.line,
+                    Some(&target_id),
+                ));
+                return ProjectedOutcome::Blocked;
+            }
+        };
         return ProjectedOutcome::Planned(Replacement {
             span: destination.span,
+            semantic: projected,
             change: RelinkChange {
                 path: source.to_path_buf(),
                 line: destination.line,
@@ -454,22 +638,42 @@ fn resolve_generic_projected_destination(
         return ProjectedOutcome::Irrelevant;
     };
     let source_parent = source_parent_of(source);
-    let future_source_parent = project_path(source_parent, projection);
-    let current_candidate = normalize(&source_parent.join(Path::new(parsed.resolution_path_text)));
-    let authored_after =
-        normalize(&future_source_parent.join(Path::new(parsed.resolution_path_text)));
-    let projected_candidate = unproject_path(&authored_after, projection);
-    let relevant = source_moves
-        || current_candidate.starts_with(&projection.from_owner)
-        || authored_after.starts_with(&projection.to_owner)
-        || projected_candidate.starts_with(&projection.from_owner);
-    if !relevant {
+    let candidates = generic_candidates(source_parent, parsed.resolution_path_text, projection);
+    if !candidates.is_relevant(projection, source_moves) {
         return ProjectedOutcome::Irrelevant;
     }
+    let GenericCandidates {
+        future_source_parent,
+        current_candidate,
+        authored_after,
+        projected_candidate,
+    } = candidates;
+
+    // Unproven candidate state must block before any valid/invalid reasoning:
+    // reading an inspection error as absence is what let relink assert a
+    // destination did not exist when it demonstrably did.
+    let current_presence = target_presence(&current_candidate, parsed.locator);
+    let projected_presence = target_presence(&projected_candidate, parsed.locator);
+    for presence in [&current_presence, &projected_presence] {
+        if let TargetPresence::Unknown(path, err) = presence {
+            findings.push(unknown_target_finding(
+                source,
+                path,
+                err,
+                destination.line,
+                None,
+            ));
+            return ProjectedOutcome::Blocked;
+        }
+    }
+    let both_absent = matches!(
+        (&current_presence, &projected_presence),
+        (TargetPresence::Absent(_), TargetPresence::Absent(_))
+    );
 
     let generic = GenericProjection {
-        current_valid: missing_target_path(&current_candidate, parsed.locator).is_none(),
-        projected_valid: missing_target_path(&projected_candidate, parsed.locator).is_none()
+        current_valid: matches!(current_presence, TargetPresence::Present),
+        projected_valid: matches!(projected_presence, TargetPresence::Present)
             && authored_after == project_path(&projected_candidate, projection),
         current_candidate,
         authored_after,
@@ -497,17 +701,70 @@ fn resolve_generic_projected_destination(
         if generic.projected_valid {
             return ProjectedOutcome::Unchanged;
         }
-        push_generic_projection_finding(
-            findings,
+        if both_absent {
+            // When settled the two candidates are the same path, so naming both
+            // reads as a bug in the message rather than a fact about the corpus.
+            let message = if generic.current_candidate == generic.projected_candidate {
+                format!(
+                    "local destination does not resolve: {}",
+                    generic.current_candidate.display()
+                )
+            } else {
+                format!(
+                    "local destination resolves to neither current {} nor projected {}",
+                    generic.current_candidate.display(),
+                    generic.projected_candidate.display()
+                )
+            };
+            push_unresolved_local_warning(findings, message, source, destination.line);
+            return ProjectedOutcome::Advisory;
+        }
+        // When settled the two candidates are the same path, so naming both reads
+        // as a bug in the message rather than a fact about the corpus.
+        let message = if generic.current_candidate == generic.projected_candidate {
+            format!(
+                "local destination does not resolve: {}",
+                generic.current_candidate.display()
+            )
+        } else {
             format!(
                 "local destination resolves to neither current {} nor projected {}",
                 generic.current_candidate.display(),
                 generic.projected_candidate.display()
-            ),
-            source,
-            destination.line,
-        );
+            )
+        };
+        push_generic_projection_finding(findings, message, source, destination.line);
         return ProjectedOutcome::Blocked;
+    }
+
+    if projection.settled {
+        // The rename already happened, so this is verification, not planning.
+        //
+        // A generic destination is verified by whether it **resolves**, not by how
+        // it is spelled. Canonicality is required only where Slopid can actually
+        // produce it — a destination carrying exactly one recognized ref, which
+        // global relink normalizes. Slopid normalizes generic destinations in no
+        // mode, so demanding canonical text here would demand a spelling the tool
+        // cannot write: ordinary authored forms like `./x.md` and `dir/` would have
+        // no repair path, and because this branch runs only once the owner has
+        // moved, the refusal would land *after* the caller's irreversible rename
+        // while the pre-move preview still reported success.
+        //
+        // The `current_valid` check above already established that this
+        // destination resolves. A spelling that genuinely breaks because the move
+        // changes the owner's depth is caught *before* the move by this same
+        // function's non-settled path, which compares the authored-after reading
+        // against the projected target and plans or blocks accordingly.
+        // (`move_cannot_change_destination` performs the analogous check for
+        // recognized refs and is never reached for a generic destination.) So this
+        // narrows a spelling requirement, not a safety one.
+        //
+        // This branch is deliberately explicit rather than a fall-through. It is
+        // documentation of a decided contract, not load-bearing control flow: with
+        // `from_owner == to_owner` the projection is the identity, so the code
+        // below would return `Unchanged` anyway. Deleting it changes no behaviour;
+        // it exists so the decision is visible where the rule lives.
+        return ProjectedOutcome::Unchanged;
     }
 
     let projected_target = project_path(&generic.current_candidate, projection);
@@ -520,15 +777,23 @@ fn resolve_generic_projected_destination(
         parsed.locator,
         parsed.fragment,
     );
+    let rendered = match render_destination_text(&semantic, destination.form) {
+        Ok(rendered) => rendered,
+        Err(err) => {
+            findings.push(render_failure_finding(&err, source, destination.line, None));
+            return ProjectedOutcome::Blocked;
+        }
+    };
     ProjectedOutcome::Planned(Replacement {
         span: destination.span,
+        semantic,
         change: RelinkChange {
             path: source.to_path_buf(),
             line: destination.line,
             column: destination.column,
             id: None,
             from: destination.original,
-            to: render_destination_text(&semantic, destination.form),
+            to: rendered,
         },
     })
 }
@@ -541,6 +806,21 @@ fn push_generic_projection_finding(
 ) {
     let mut finding = Finding::error(
         FindingCode::RelinkProjectionDrift,
+        message,
+        Some(source.to_path_buf()),
+    );
+    finding.line = Some(line);
+    findings.push(finding);
+}
+
+fn push_unresolved_local_warning(
+    findings: &mut Vec<Finding>,
+    message: String,
+    source: &Path,
+    line: usize,
+) {
+    let mut finding = Finding::warning(
+        FindingCode::RelinkUnresolvedLocalDestination,
         message,
         Some(source.to_path_buf()),
     );
@@ -660,10 +940,17 @@ fn refused_result(
     }
 }
 
-/// Hand the approved plan to the existing per-file writer. The whole-plan digest
-/// is the first race boundary; the per-file byte check stays the second, so one
-/// raced file still cannot roll back an independent successful replacement. The
-/// returned digest stays the approved pre-write digest — the next state comes
+/// Hand the approved plan to the existing per-file writer.
+///
+/// Two checks narrow the race and neither closes it. The whole-plan digest
+/// refuses an approval that no longer matches the corpus. The per-file byte
+/// comparison then skips any file whose bytes already changed before that
+/// comparison, so one raced file cannot roll back an independent successful
+/// replacement. Both are early-race checks only: an edit landing after the
+/// comparison and before atomic replacement is overwritten, which is why the
+/// caller owns authored-writer quiescence across this whole interval.
+///
+/// The returned digest stays the approved pre-write digest — the next state comes
 /// from a fresh preview, not from hashing after a partial write.
 fn apply_move_plan_with<F>(plan: MoveRelinkPlan, digest: String, replace: F) -> RelinkResult
 where
@@ -710,6 +997,7 @@ mod tests {
     fn replacement(path: &Path, from: &str, to: &str) -> Replacement {
         Replacement {
             span: 0..from.len(),
+            semantic: to.into(),
             change: RelinkChange {
                 path: path.to_path_buf(),
                 line: 1,
@@ -809,6 +1097,53 @@ mod tests {
         let mut changed_source = authority();
         changed_source.effect_sources[0].sha256 = hex_sha256(b"b");
         assert_ne!(digest, plan_digest(&changed_source).unwrap());
+
+        let mut warned = authority();
+        let mut warning = Finding::warning(
+            FindingCode::RelinkUnresolvedLocalDestination,
+            "local destination does not resolve: /missing.md",
+            Some(PathBuf::from("/a.md")),
+        );
+        warning.line = Some(7);
+        warned.findings.push(warning);
+        let warning_digest = plan_digest(&warned).unwrap();
+        assert_ne!(digest, warning_digest);
+
+        let mut changed_warning = warned;
+        changed_warning.findings[0].line = Some(8);
+        assert_ne!(warning_digest, plan_digest(&changed_warning).unwrap());
+    }
+
+    #[test]
+    fn only_not_found_proves_the_projected_destination_absent() {
+        use std::io::{Error, ErrorKind};
+
+        assert_eq!(
+            classify_projected_destination(&Ok::<(), Error>(())),
+            ProjectedDestinationState::Occupied
+        );
+        assert_eq!(
+            classify_projected_destination(&Err::<(), Error>(Error::from(ErrorKind::NotFound))),
+            ProjectedDestinationState::Absent
+        );
+        // Everything else leaves the destination's state unknown. Reading these
+        // as absence let a scoped write rewrite inbound links before a rename
+        // that could not succeed.
+        for kind in [
+            ErrorKind::PermissionDenied,
+            ErrorKind::NotADirectory,
+            ErrorKind::InvalidInput,
+        ] {
+            assert_eq!(
+                classify_projected_destination(&Err::<(), Error>(Error::from(kind))),
+                ProjectedDestinationState::Unknown(kind),
+                "{kind:?} must not be read as proof of absence"
+            );
+        }
+        assert!(matches!(
+            classify_projected_destination(&Err::<(), Error>(Error::other("opaque"))),
+            ProjectedDestinationState::Unknown(_)
+        ));
     }
 
     #[test]

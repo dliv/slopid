@@ -138,8 +138,21 @@ lifecycle move would change:\n\
 Both forms preview by default. A projected write requires the exact digest from\n\
 a fresh preview and refuses before touching any file when the plan changed or\n\
 is incomplete; a partial result requires another preview. Projected complete\n\
-classifies every local destination in Slopid's authored-source coverage, not\n\
-excluded inbox, note, tmp, VCS, or ignored paths.")]
+means move-caused repair authority is safe, not that every local destination\n\
+resolves. A generic destination proven absent under both current and projected\n\
+readings yields relink-unresolved-local-destination with severity:warning. Its\n\
+finding and complete source bytes bind the digest, but it creates no replacement\n\
+or completeness failure; exact-digest warning-only write is zero-change\n\
+convergence. Ambiguity, unknown inspection, unsafe representation, and actual\n\
+move-caused drift remain errors. Settled verification retains warnings. Excluded\n\
+inbox, note, tmp, VCS, and ignored paths remain outside this proof boundary.\n\
+\n\
+A projected --write and the owner rename you perform afterwards need a\n\
+quiescent authored-source window: keep editors and background agents from\n\
+writing the scanned Markdown until both are done. Slopid does not detect or\n\
+lease writers. Its per-file byte check skips a file whose bytes already\n\
+changed before the check; it is not a lock, lease, or compare-and-swap, so a\n\
+write landing after that check and before atomic replacement is overwritten.")]
     Relink {
         /// Apply independently verified per-file repairs; default is preview
         #[arg(long)]

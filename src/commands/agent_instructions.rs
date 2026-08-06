@@ -42,11 +42,31 @@ Then use `sid relink --move sa2a7 --into .archive --write --expected-plan-sha256
 with the digest from a fresh preview. A projected write refuses
 before touching any file when the plan changed or is incomplete, and a partial
 result requires another preview rather than a rollback. When the owner already
-sits under that root, the same command verifies its scoped links are canonical.
-Projected `complete` classifies every local destination in Slopid's authored
-source coverage, including ref-less and multi-ref paths. Generic projected
-changes use `id:null`. Excluded inbox, note, tmp, VCS, and ignored paths remain
-outside that proof boundary. Slopid only repairs Markdown destinations.
+sits under that root, the same command verifies its scoped links instead of
+planning a move.
+Projected `complete` means move-caused repair authority is safe; it is not a
+certificate that every local destination resolves. A generic destination proven
+absent under both current and projected readings yields
+`relink-unresolved-local-destination` with `severity:warning`. The finding and
+complete source bytes bind the digest, but no replacement is authorized and
+completeness stays true. Exact-digest warning-only `--write` is valid zero-change
+convergence. Every destination inside the move effect set,
+including ref-less and multi-ref paths, is matched to one raw span independently
+proven to decode to it, or it blocks completeness; each replacement is proven to reparse to the
+intended destination before write authority. Generic projected changes use
+`id:null`. Ambiguity, unknown target inspection, unsafe representation, and
+actual move-caused drift remain errors. Settled verification requires canonical
+text only for recognized refs; it verifies generic paths by whether they resolve
+or are proven absent and retains proven-absence warnings. Excluded inbox, note,
+tmp, VCS, and ignored paths remain outside that proof boundary. Aggregate close
+callers must display warnings and bind intentional owned-resource retirement
+consequences into their destructive preview rather than turn them into late
+terminal failures.
+Keep authored Markdown writers quiescent from an approved projected `--write`
+through the owner rename you perform afterwards. Slopid never detects or leases
+authored writers: its per-file byte check skips a file whose bytes already
+changed before the comparison, but a write landing after that check and before
+atomic replacement is overwritten. Slopid only repairs Markdown destinations.
 It never moves a folder, files a task, or performs any other lifecycle step.
 The read/query commands are read-only and emit JSON by default. Inspect `complete`
 and `findings` before treating partial context as authoritative. Parse canonical

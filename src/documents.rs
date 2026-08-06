@@ -73,6 +73,10 @@ pub enum FindingCode {
     /// A move-scoped destination matches neither the current nor the projected
     /// canonical path, so projected relink refuses instead of normalizing it.
     RelinkProjectionDrift,
+    /// A generic local destination is proven absent under both its current and
+    /// projected readings. It remains visible and approval-bound without
+    /// making a move-projected plan incomplete.
+    RelinkUnresolvedLocalDestination,
     /// A projected write was approved against a plan that no longer matches.
     /// Transient: it describes the request, not the scanned corpus, so it never
     /// contributes to the recomputed plan digest.

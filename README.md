@@ -57,9 +57,11 @@ destination_extensions = ["colon-line"]
 ```
 
 With `colon-line`, `sid relink` recognizes only a terminal positive decimal
-locator such as `:33`. It still gives an existing literal colon-suffixed file
-precedence; otherwise it resolves and checks the base file while preserving
-the locator and any following `#fragment`. It does not validate line counts.
+locator such as `:33` whose base does not end in `/`. A separator-ended spelling
+such as `assets/:33` remains an ordinary literal path. For a recognized locator,
+Slopid still gives an existing literal colon-suffixed file precedence; otherwise
+it resolves and checks the base file while preserving the locator and any
+following `#fragment`. It does not validate line counts.
 Omitting `[relink]` or using an empty list preserves the default literal-path
 behavior. Unknown extension names fail config parsing.
 
@@ -103,16 +105,50 @@ plus links authored inside it whose source directory moves. Writing requires tha
 exact digest from a *fresh* preview and refuses before touching any file if the
 plan changed or is incomplete. A partial write is forward-recoverable rather than
 rolled back, so take another preview and apply the remainder. If the owner already
-sits under the destination root, the same command verifies that its scoped links
-are canonical instead of planning a move.
+sits under the destination root, the same command verifies its scoped links
+instead of planning a move.
 
-`complete:true` means every local destination in Slopid's declared authored
-source coverage was classified and this scoped plan is safe to apply. That
-includes ref-less and multi-ref local paths; projected generic changes report
-`id:null` rather than inventing target identity. It is not proof over excluded
-sources such as task `inbox`, notes, `tmp`, VCS metadata, or ignored paths. See
+`complete:true` means every move-caused repair in Slopid's declared authored
+source coverage was classified and this scoped plan is safe to apply. It is not
+a certificate that every local destination resolves. A generic destination
+proven absent under both its current and projected readings yields
+`relink-unresolved-local-destination` with `severity:warning`. The warning and
+the source's complete bytes bind `plan_sha256`, but no replacement is proposed
+and completeness stays true; an exact-digest warning-only `--write` is valid
+zero-change convergence. Ref-less and multi-ref projected changes still report
+`id:null` rather than inventing target identity. Excluded task `inbox`, notes,
+`tmp`, VCS metadata, and ignored paths remain outside the proof boundary. See
 [contract 0006](docs/contracts/0006-move-projected-relink.md) for the exact
 effect set, digest authority, and refusal rules.
+
+Every in-scope destination is matched to one raw byte range independently proven
+to decode to the destination the parser reported, and every replacement is
+proven to reparse to the intended destination before it becomes write authority.
+A destination whose span or representation cannot be proven yields
+`unreadable-entry` and makes the result incomplete instead of being guessed or
+quietly dropped. Settled verification requires canonical text only where Slopid
+can produce it — a destination carrying one recognized ref, which global relink
+normalizes — and verifies generic ref-less and multi-ref paths by whether they
+resolve or are proven absent. Proven absence remains a warning in settled
+verification. Ambiguity, unknown inspection state, unsafe representation, and
+actual move-caused drift remain errors. Only `NotFound` proves absence; any
+other inspection error refuses. Aggregate close callers must display warnings
+and bind intentional owned-resource retirement consequences into their
+destructive preview rather than converting them into late terminal failures.
+
+### Authored-writer quiescence
+
+Keep authored Markdown writers quiescent from an approved projected `--write`
+through the owner rename you perform afterwards. This is the caller's duty:
+Slopid does not detect or lease writers, and has no lock, session registry, or
+compare-and-swap.
+
+The per-file byte check is an early-race check only. It skips a file whose bytes
+already changed before the comparison, but an edit landing after that check and
+before the atomic replacement is overwritten. Atomic replacement prevents a torn
+file, not a lost concurrent edit. That narrow window is an accepted limitation of
+this version; if an unexpected writer may have run, take a fresh preview rather
+than trusting the previous comparison.
 
 Slopid only repairs Markdown destinations. It does not move folders, file tasks,
 or run any other part of a lifecycle operation.
