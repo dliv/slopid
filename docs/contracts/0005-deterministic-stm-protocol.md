@@ -34,8 +34,11 @@ The project config accepts these tables and defaults:
 When omitted, seed and note roots are `.seeds` and `.notes` beneath the
 effective task root; topics are never implicit. All configured paths are
 project-relative and reject absolute, parent, empty, current-directory, and
-unknown settings. Missing typed roots are successful empty sources. Existing
-task-only configs remain valid.
+unknown settings. Seed and note roots must be distinct configured paths and,
+when both exist, must not identify the same filesystem directory. A missing
+root proves no current physical alias and remains a successful empty source;
+other root-identity errors fail configuration. Existing task-only configs
+remain valid.
 
 An optional `[ref].deny_prefixes` array is an exact replacement for the
 built-in `prude` policy. Omitting it uses `prude`; setting it to `[]` allows
@@ -102,9 +105,10 @@ Notes contain exactly absolute `path`, UTC RFC3339 second-precision `modified`,
 and `bytes`, sorted newest mtime then path; content is never returned. Seeds
 are canonical nodes sorted newest timestamp then id/path. Missing roots are
 complete and empty. Unreadable notes or malformed seeds make the usable result
-partial. Direct `log.md` beneath the note root is reserved for the filing
-ledger and is excluded from both capture inventory and literal search; it is
-not a pending capture.
+partial. Direct dot-prefixed files beneath the note root are metadata, not
+pending captures, and are excluded from both capture inventory and literal
+search. Direct `log.md` is likewise reserved for the filing ledger and
+excluded from both commands.
 
 The default stale threshold is seven UTC calendar days; zero disables stale
 warnings. Age six is clear and age seven warns. `stale-inbox-message` and

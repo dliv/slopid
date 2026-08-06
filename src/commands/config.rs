@@ -174,6 +174,7 @@ pub fn load_project_config(cwd: &Path) -> Result<ProjectConfig> {
 
     let seed_root = base.join(seed_root);
     let note_root = base.join(note_root);
+    validate_distinct_seed_and_note_roots(&seed_root, &note_root)?;
 
     Ok(ProjectConfig {
         base,
@@ -274,6 +275,34 @@ fn validate_relative_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn validate_distinct_seed_and_note_roots(seed_root: &Path, note_root: &Path) -> Result<()> {
+    validate_distinct_seed_and_note_roots_with(seed_root, note_root, |seed_root, note_root| {
+        same_file::is_same_file(seed_root, note_root)
+    })
+}
+
+fn validate_distinct_seed_and_note_roots_with(
+    seed_root: &Path,
+    note_root: &Path,
+    is_same_file: impl FnOnce(&Path, &Path) -> std::io::Result<bool>,
+) -> Result<()> {
+    if seed_root == note_root {
+        bail!("seed and note roots must resolve to distinct directories");
+    }
+    match is_same_file(seed_root, note_root) {
+        Ok(true) => bail!("seed and note roots must resolve to distinct directories"),
+        Ok(false) => Ok(()),
+        Err(err) if matches!(err.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => Ok(()),
+        Err(err) => Err(err).with_context(|| {
+            format!(
+                "compare seed and note root identity: {} and {}",
+                seed_root.display(),
+                note_root.display()
+            )
+        }),
+    }
+}
+
 pub fn init_config(cwd: &Path) -> Result<InitConfigResult> {
     let cwd = cwd
         .canonicalize()
@@ -311,4 +340,52 @@ pub fn init_config(cwd: &Path) -> Result<InitConfigResult> {
         path,
         created: true,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io;
+
+    #[test]
+    fn physical_root_identity_rejects_same_filesystem_object() {
+        let error = validate_distinct_seed_and_note_roots_with(
+            Path::new("seed-root"),
+            Path::new("note-root"),
+            |_, _| Ok(true),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("seed and note roots must resolve to distinct directories")
+        );
+    }
+
+    #[test]
+    fn physical_root_identity_allows_paths_without_current_objects() {
+        for kind in [io::ErrorKind::NotFound, io::ErrorKind::NotADirectory] {
+            validate_distinct_seed_and_note_roots_with(
+                Path::new("seed-root"),
+                Path::new("note-root"),
+                |_, _| Err(io::Error::from(kind)),
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn physical_root_identity_errors_fail_closed() {
+        let error = validate_distinct_seed_and_note_roots_with(
+            Path::new("seed-root"),
+            Path::new("note-root"),
+            |_, _| Err(io::Error::from(io::ErrorKind::PermissionDenied)),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("compare seed and note root identity")
+        );
+    }
 }

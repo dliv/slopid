@@ -766,6 +766,7 @@ dependencies = [
  "predicates",
  "pulldown-cmark",
  "regex",
+ "same-file",
  "serde",
  "serde_json",
  "sha2",

@@ -16,6 +16,7 @@ fastrand = "2"
 ignore = "0.4"
 pulldown-cmark = { version = "0.13", default-features = false }
 regex = "1"
+same-file = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

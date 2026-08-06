@@ -159,7 +159,7 @@ pub(crate) fn scan_notes(
             }
         };
         let path = entry.path();
-        if is_reserved_note_file(&path) {
+        if !is_pending_note_file(&path) {
             continue;
         }
         let metadata = match entry.metadata() {
@@ -217,8 +217,9 @@ pub(crate) fn scan_notes(
     )
 }
 
-pub(crate) fn is_reserved_note_file(path: &Path) -> bool {
-    path.file_name().is_some_and(|name| name == "log.md")
+pub(crate) fn is_pending_note_file(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name != "log.md" && !name.as_encoded_bytes().starts_with(b"."))
 }
 
 pub(crate) fn scan_inbox(

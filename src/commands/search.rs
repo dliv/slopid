@@ -11,7 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use unicode_segmentation::UnicodeSegmentation;
 
-use super::{is_reserved_note_file, load_project_config};
+use super::{is_pending_note_file, load_project_config};
 
 /// Excerpt text is capped at this many Unicode scalar values, elision markers
 /// included (contract 0005).
@@ -281,7 +281,7 @@ fn add_direct_files(
         match entry {
             Ok(entry) if entry.file_type().is_ok_and(|kind| kind.is_file()) => {
                 let path = entry.path();
-                if !notes || !is_reserved_note_file(&path) {
+                if !notes || is_pending_note_file(&path) {
                     paths.insert(path);
                 }
             }
