@@ -55,13 +55,13 @@ including ref-less and multi-ref paths, is matched to one raw span independently
 proven to decode to it, or it blocks completeness; each replacement is proven to reparse to the
 intended destination before write authority. Generic projected changes use
 `id:null`. Ambiguity, unknown target inspection, unsafe representation, and
-actual move-caused drift remain errors. Settled verification requires canonical
-text only for recognized refs; it verifies generic paths by whether they resolve
-or are proven absent and retains proven-absence warnings. Excluded inbox, note,
-tmp, VCS, and ignored paths remain outside that proof boundary. Aggregate close
-callers must display warnings and bind intentional owned-resource retirement
-consequences into their destructive preview rather than turn them into late
-terminal failures.
+actual move-caused drift remain errors. Settled verification judges
+recognized-ref and generic destinations by unambiguous resolution to their intended target;
+canonical spelling belongs to ordinary global relink. Recognized missing-target
+and ambiguity errors remain blocking, while generic proven absence retains its
+warning. Excluded inbox, note, tmp, VCS, and ignored paths remain
+outside that proof boundary. Slopid reports only observed link and filesystem
+state and does not model cleanup-resource lifecycle.
 Keep authored Markdown writers quiescent from an approved projected `--write`
 through the owner rename you perform afterwards. Slopid never detects or leases
 authored writers: its per-file byte check skips a file whose bytes already

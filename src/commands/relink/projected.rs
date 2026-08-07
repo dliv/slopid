@@ -536,33 +536,29 @@ fn resolve_projected_destination(
     let current =
         canonical_destination_text(source_parent, &target, parsed.locator, parsed.fragment);
 
-    if projection.settled {
-        // The rename already happened, so there is nothing to project: this is
-        // verification that scoped destinations are currently canonical.
-        return if resolved == current {
-            ProjectedOutcome::Unchanged
-        } else {
-            push_candidate_finding(
-                findings,
-                FindingCode::RelinkProjectionDrift,
-                format!("settled destination for {target_id} is not canonical; expected {current}"),
-                source,
-                &target_id,
-                destination.line,
-            );
-            ProjectedOutcome::Blocked
-        };
+    if projection.settled
+        && record.source_kind == CanonicalSourceKind::TaskOwner
+        && !normalize(&target).starts_with(normalize(&record.owner_path))
+    {
+        push_candidate_finding(
+            findings,
+            FindingCode::RelinkProjectionDrift,
+            format!(
+                "settled destination {resolved} for {target_id} resolves outside the intended indexed owner {}",
+                record.owner_path.display()
+            ),
+            source,
+            &target_id,
+            destination.line,
+        );
+        return ProjectedOutcome::Blocked;
     }
 
-    let projected = canonical_destination_text(
-        &project_path(source_parent, projection),
-        &project_path(&target, projection),
-        parsed.locator,
-        parsed.fragment,
-    );
     // Source and target move together and the *authored bytes* still land on the
     // same file afterwards, so the move causes no change here. Any ordinary
     // normalization this destination still needs belongs to global relink.
+    // For an identity projection, this reduces to proving that the authored
+    // destination resolves to the exact indexed target now.
     //
     // This must test the authored path, not `projected == current`. Canonical
     // text equality is not sufficient: an authored spelling that traverses above
@@ -578,6 +574,30 @@ fn resolve_projected_destination(
     ) {
         return ProjectedOutcome::Unchanged;
     }
+
+    if projection.settled {
+        // The rename already happened, so there is nothing to project: this is
+        // verification that the authored destination resolves to the intended
+        // indexed target, independent of harmless spelling differences.
+        push_candidate_finding(
+            findings,
+            FindingCode::RelinkProjectionDrift,
+            format!(
+                "settled destination {resolved} for {target_id} does not resolve to the intended target {current}"
+            ),
+            source,
+            &target_id,
+            destination.line,
+        );
+        return ProjectedOutcome::Blocked;
+    }
+
+    let projected = canonical_destination_text(
+        &project_path(source_parent, projection),
+        &project_path(&target, projection),
+        parsed.locator,
+        parsed.fragment,
+    );
     if resolved == current {
         let rendered = match render_destination_text(&projected, destination.form) {
             Ok(rendered) => rendered,
@@ -740,24 +760,19 @@ fn resolve_generic_projected_destination(
     if projection.settled {
         // The rename already happened, so this is verification, not planning.
         //
-        // A generic destination is verified by whether it **resolves**, not by how
-        // it is spelled. Canonicality is required only where Slopid can actually
-        // produce it — a destination carrying exactly one recognized ref, which
-        // global relink normalizes. Slopid normalizes generic destinations in no
-        // mode, so demanding canonical text here would demand a spelling the tool
-        // cannot write: ordinary authored forms like `./x.md` and `dir/` would have
-        // no repair path, and because this branch runs only once the owner has
-        // moved, the refusal would land *after* the caller's irreversible rename
-        // while the pre-move preview still reported success.
+        // Generic and recognized-ref destinations are both verified by whether
+        // they resolve unambiguously to their intended target, not by spelling.
+        // Ordinary global relink retains normalization authority for recognized
+        // refs. Slopid normalizes generic destinations in no mode, so this branch
+        // must accept ordinary resolving forms such as `./x.md` and `dir/`.
         //
         // The `current_valid` check above already established that this
         // destination resolves. A spelling that genuinely breaks because the move
         // changes the owner's depth is caught *before* the move by this same
         // function's non-settled path, which compares the authored-after reading
         // against the projected target and plans or blocks accordingly.
-        // (`move_cannot_change_destination` performs the analogous check for
-        // recognized refs and is never reached for a generic destination.) So this
-        // narrows a spelling requirement, not a safety one.
+        // (`move_cannot_change_destination` performs the identity-backed check for
+        // recognized refs before this generic resolver is selected.)
         //
         // This branch is deliberately explicit rather than a fall-through. It is
         // documentation of a decided contract, not load-bearing control flow: with

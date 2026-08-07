@@ -2371,6 +2371,206 @@ fn relink_projected_settled_owner_verifies_scoped_destinations() {
 }
 
 #[test]
+fn relink_projected_settled_recognized_refs_verify_resolution_not_spelling() {
+    let tmp = move_project();
+    fs::create_dir_all(tmp.path().join("work/.archive")).unwrap();
+    fs::rename(
+        tmp.path().join("work/202402_sa2a7_task"),
+        tmp.path().join("work/.archive/202402_sa2a7_task"),
+    )
+    .unwrap();
+
+    let archived_target = tmp
+        .path()
+        .join("work/.archive/202402_sa2a7_task/CURRENT_STATE.md");
+    let inbound = tmp.path().join("knowledge/inbound-noncanonical.md");
+    let inbound_destination = "../work/.archive/202402_sa2a7_task/./CURRENT_STATE.md";
+    write_markdown(&inbound, &format!("[inbound]({inbound_destination})\n"));
+    assert_eq!(
+        fs::canonicalize(inbound.parent().unwrap().join(inbound_destination)).unwrap(),
+        fs::canonicalize(&archived_target).unwrap(),
+        "the inbound authored spelling must reach the exact indexed target",
+    );
+
+    let outbound = tmp
+        .path()
+        .join("work/.archive/202402_sa2a7_task/outbound.md");
+    let outbound_destination = "../.././202404_sd5d2_other/CURRENT_STATE.md";
+    let outbound_target = tmp.path().join("work/202404_sd5d2_other/CURRENT_STATE.md");
+    write_markdown(&outbound, &format!("[outbound]({outbound_destination})\n"));
+    assert_eq!(
+        fs::canonicalize(outbound.parent().unwrap().join(outbound_destination)).unwrap(),
+        fs::canonicalize(&outbound_target).unwrap(),
+        "the outbound authored spelling must reach the exact indexed target",
+    );
+
+    let inbound_before = text_of(&inbound);
+    let outbound_before = text_of(&outbound);
+    let settled = projected_preview(tmp.path(), "sa2a7", ".archive");
+    assert_eq!(settled["projection"]["settled"], true, "{settled:#}");
+    assert_eq!(settled["complete"], true, "{settled:#}");
+    assert_eq!(settled["applied"], false, "{settled:#}");
+    assert!(settled["changes"].as_array().unwrap().is_empty());
+    assert!(finding_codes(&settled).is_empty(), "{settled:#}");
+    assert_eq!(text_of(&inbound), inbound_before);
+    assert_eq!(text_of(&outbound), outbound_before);
+
+    let global = global_relink(tmp.path(), false);
+    assert_eq!(global["complete"], true, "{global:#}");
+    assert_eq!(
+        change_pairs(&global),
+        [
+            (
+                inbound_destination.to_string(),
+                "../work/.archive/202402_sa2a7_task/CURRENT_STATE.md".to_string(),
+            ),
+            (
+                outbound_destination.to_string(),
+                "../../202404_sd5d2_other/CURRENT_STATE.md".to_string(),
+            ),
+        ],
+        "ordinary global relink must retain canonical spelling authority",
+    );
+
+    let applied = projected_write(tmp.path(), "sa2a7", ".archive", &plan_digest(&settled));
+    assert_eq!(applied["applied"], true, "{applied:#}");
+    assert_eq!(applied["complete"], true, "{applied:#}");
+    assert!(applied["changes"].as_array().unwrap().is_empty());
+    assert!(finding_codes(&applied).is_empty(), "{applied:#}");
+    assert_eq!(text_of(&inbound), inbound_before);
+    assert_eq!(text_of(&outbound), outbound_before);
+}
+
+#[test]
+fn relink_projected_settled_recognized_ref_guards_remain_fail_closed() {
+    let wrong = move_project();
+    fs::create_dir_all(wrong.path().join("work/.archive")).unwrap();
+    fs::rename(
+        wrong.path().join("work/202402_sa2a7_task"),
+        wrong.path().join("work/.archive/202402_sa2a7_task"),
+    )
+    .unwrap();
+    let decoy = wrong
+        .path()
+        .join("untracked/202402_sa2a7_task/CURRENT_STATE.md");
+    write_markdown(&decoy, "# Decoy\n");
+    let indexed_target = wrong
+        .path()
+        .join("work/.archive/202402_sa2a7_task/CURRENT_STATE.md");
+    let wrong_source = wrong.path().join("knowledge/wrong-existing.md");
+    let wrong_destination = "../untracked/202402_sa2a7_task/CURRENT_STATE.md";
+    write_markdown(&wrong_source, &format!("[wrong]({wrong_destination})\n"));
+    assert!(decoy.exists() && indexed_target.exists());
+    assert_ne!(
+        fs::canonicalize(wrong_source.parent().unwrap().join(wrong_destination)).unwrap(),
+        fs::canonicalize(&indexed_target).unwrap(),
+        "the existing decoy must not be the indexed target",
+    );
+    let wrong_preview = projected_preview(wrong.path(), "sa2a7", ".archive");
+    assert_eq!(wrong_preview["projection"]["settled"], true);
+    assert_eq!(wrong_preview["complete"], false, "{wrong_preview:#}");
+    assert!(wrong_preview["changes"].as_array().unwrap().is_empty());
+    assert_eq!(
+        finding_codes(&wrong_preview),
+        ["relink-projection-drift"],
+        "an existing wrong candidate must fail exact-target proof: {wrong_preview:#}",
+    );
+
+    let escaped = move_project();
+    fs::create_dir_all(escaped.path().join("work/.archive")).unwrap();
+    fs::rename(
+        escaped.path().join("work/202402_sa2a7_task"),
+        escaped.path().join("work/.archive/202402_sa2a7_task"),
+    )
+    .unwrap();
+    let escaped_owner = escaped.path().join("work/.archive/202402_sa2a7_task");
+    let outside_target = escaped.path().join("knowledge/outside.md");
+    write_markdown(&outside_target, "# Outside\n");
+    let escaped_source = escaped.path().join("knowledge/escaped.md");
+    let escaped_destination = "../work/.archive/202402_sa2a7_task/../../../knowledge/outside.md";
+    write_markdown(
+        &escaped_source,
+        &format!("[escaped]({escaped_destination})\n"),
+    );
+    let canonical_outside = fs::canonicalize(&outside_target).unwrap();
+    assert_eq!(
+        fs::canonicalize(escaped_source.parent().unwrap().join(escaped_destination),).unwrap(),
+        canonical_outside,
+        "the authored escape must reach the existing outside target",
+    );
+    assert!(
+        !canonical_outside.starts_with(fs::canonicalize(&escaped_owner).unwrap()),
+        "the existing outside target must not belong to the indexed owner",
+    );
+    let escaped_preview = projected_preview(escaped.path(), "sa2a7", ".archive");
+    assert_eq!(escaped_preview["projection"]["settled"], true);
+    assert_eq!(escaped_preview["complete"], false, "{escaped_preview:#}");
+    assert!(escaped_preview["changes"].as_array().unwrap().is_empty());
+    assert_eq!(
+        finding_codes(&escaped_preview),
+        ["relink-projection-drift"],
+        "a recognized suffix must not escape its indexed owner: {escaped_preview:#}",
+    );
+
+    let missing = move_project();
+    fs::create_dir_all(missing.path().join("work/.archive")).unwrap();
+    fs::rename(
+        missing.path().join("work/202402_sa2a7_task"),
+        missing.path().join("work/.archive/202402_sa2a7_task"),
+    )
+    .unwrap();
+    write_markdown(
+        &missing.path().join("knowledge/missing.md"),
+        "[missing](../work/.archive/202402_sa2a7_task/gone.md)\n",
+    );
+    let missing_preview = projected_preview(missing.path(), "sa2a7", ".archive");
+    assert_eq!(missing_preview["projection"]["settled"], true);
+    assert_eq!(missing_preview["complete"], false, "{missing_preview:#}");
+    assert!(missing_preview["changes"].as_array().unwrap().is_empty());
+    assert_eq!(
+        finding_codes(&missing_preview),
+        ["relink-missing-internal-target"],
+        "a missing recognized internal target must remain blocking: {missing_preview:#}",
+    );
+
+    let unknown = move_project();
+    let owner = unknown.path().join("work/202402_sa2a7_task");
+    std::os::unix::fs::symlink("loop_b", owner.join("loop_a")).unwrap();
+    std::os::unix::fs::symlink("loop_a", owner.join("loop_b")).unwrap();
+    fs::create_dir_all(unknown.path().join("work/.archive")).unwrap();
+    fs::rename(
+        &owner,
+        unknown.path().join("work/.archive/202402_sa2a7_task"),
+    )
+    .unwrap();
+    let loop_a = unknown
+        .path()
+        .join("work/.archive/202402_sa2a7_task/loop_a");
+    assert!(loop_a.symlink_metadata().is_ok());
+    let loop_error = loop_a
+        .metadata()
+        .expect_err("the relative mutual symlink loop must not resolve");
+    assert_ne!(
+        loop_error.kind(),
+        std::io::ErrorKind::NotFound,
+        "the fixture must exercise unknown state rather than absence",
+    );
+    write_markdown(
+        &unknown.path().join("knowledge/unknown.md"),
+        "[unknown](../work/.archive/202402_sa2a7_task/loop_a)\n",
+    );
+    let unknown_preview = projected_preview(unknown.path(), "sa2a7", ".archive");
+    assert_eq!(unknown_preview["projection"]["settled"], true);
+    assert_eq!(unknown_preview["complete"], false, "{unknown_preview:#}");
+    assert!(unknown_preview["changes"].as_array().unwrap().is_empty());
+    assert_eq!(
+        finding_codes(&unknown_preview),
+        ["unreadable-entry"],
+        "unknown recognized target state must remain blocking: {unknown_preview:#}",
+    );
+}
+
+#[test]
 fn relink_projected_review_move_and_suffixes_preserve_contract() {
     let tmp = move_project();
     configure_relink_extensions(tmp.path(), &["colon-line"]);
@@ -3370,12 +3570,26 @@ fn relink_help_and_agent_instructions_state_the_bounded_quiescence_contract() {
         "agent instructions must not claim corpus-wide span authority: {instructions}"
     );
     assert!(
-        instructions.contains("canonical text only for recognized refs"),
-        "agent instructions must state which destinations canonicality applies to: {instructions}"
+        instructions.contains(
+            "recognized-ref and generic destinations by unambiguous resolution to their intended target"
+        ),
+        "agent instructions must state the shared settled-resolution rule: {instructions}"
     );
     assert!(
-        instructions.contains("verifies generic paths by whether they resolve"),
-        "agent instructions must state the generic settled rule: {instructions}"
+        instructions.contains("canonical spelling belongs to ordinary global relink"),
+        "agent instructions must leave normalization with global relink: {instructions}"
+    );
+    assert!(
+        instructions.contains("does not model cleanup-resource lifecycle"),
+        "agent instructions must keep cleanup-resource taxonomy outside Slopid: {instructions}"
+    );
+    assert!(
+        !instructions.contains(concat!("canonical text only ", "for recognized refs"))
+            && !instructions.contains(concat!(
+                "intentional owned-resource ",
+                "retirement consequences"
+            )),
+        "agent instructions must reject the superseded canonicality and cleanup-retirement rules: {instructions}"
     );
     // The superseded symmetric rule must not reappear on any operator surface.
     // A presence-only assertion previously locked this obsolete sentence in place,

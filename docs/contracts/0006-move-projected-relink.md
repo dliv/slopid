@@ -258,28 +258,25 @@ corpus Slopid read, not the corpus at the moment a later rename happens; see
 When the selected owner already lives under the selected root, the projection is
 `settled:true` and `from_owner` equals `to_owner`. The same scoped union is
 inspected under the split rule below. Settled verification never plans a
-move-caused change. Recognized-ref canonical drift, ambiguity, unknown state,
-or unsafe representation still yields an error with `complete:false`; proven
-generic absence retains the warning and leaves completeness true. This is what
-makes final close verification and a retry after a lost response safe.
+move-caused change. Recognized-ref resolution drift, missing targets, ambiguity,
+unknown state, or unsafe representation still yield an error with
+`complete:false`; proven generic absence retains the warning and leaves
+completeness true. This is what makes final close verification and a retry after
+a lost response safe.
 
-Canonicality is required only where Slopid can produce it. A destination carrying
-exactly one recognized ref must be canonical, because global relink normalizes
-those. A generic ref-less or multi-ref destination is verified by whether it
-**resolves**: one that resolves to an existing target under the settled owner is
-clean even when its spelling is noncanonical. One proven absent yields
-`relink-unresolved-local-destination` with `severity:warning`; ambiguity or
-unproven inspection still blocks.
+Settled verification judges both recognized-ref and generic destinations by
+preserved, unambiguous resolution rather than spelling. A destination carrying
+exactly one recognized ref must resolve to the exact identity-indexed target;
+its missing-target and ambiguity failures remain blocking. A generic ref-less or
+multi-ref destination that resolves unambiguously to its intended target is
+likewise clean. Generic proven absence yields
+`relink-unresolved-local-destination` with `severity:warning`, while ambiguity or
+unproven inspection still blocks. Ordinary global relink may still normalize a
+harmless noncanonical recognized-ref spelling.
 
-The asymmetry is deliberate and was chosen after the symmetric rule proved
-unsatisfiable. Slopid normalizes generic destinations in no mode, so requiring
-canonical text for them demanded a spelling the tool cannot write. Ordinary
-authored forms such as `./x.md` and `dir/` therefore had no repair path, and
-because settled verification runs only once the owner has moved, the refusal landed
-*after* the caller's irreversible rename while the pre-move preview still reported
-`complete:true`. Treating proven absence as a warning keeps verification focused
-on the bound move outcome without claiming corpus health or demanding repair
-authority this command does not have.
+Treating resolving spellings as clean and generic proven absence as advisory
+keeps verification focused on the bound move outcome without claiming corpus
+health or demanding repair authority this command does not have.
 
 This narrows a spelling requirement, not a safety one. A spelling that genuinely
 breaks because the move changes the owner's depth is still caught *before* the move
@@ -396,11 +393,10 @@ error, and `relink-unresolved-local-destination` is a substantive
 in the shared `affects-completeness` or operational classifications used by
 `lint`, because none can appear in a document-index scan.
 
-An aggregate close caller must display the warning and keep it in approval
-authority. If confirmed cleanup intentionally retires the warning's exact
-forest, sandbox, runtime, or other owned target, the aggregate destructive
-preview binds that meaning; settled verification must not rediscover it as a
-late terminal failure. Slopid itself carries no lifecycle or deletion policy.
+Slopid reports only the filesystem and link state it observes. It has no
+lifecycle or resource taxonomy and does not predict later cleanup. A generic
+destination that no longer resolves remains the same advisory warning on a fresh
+settled verification rather than becoming a terminal move failure.
 
 Every usable projected result exits 0 with JSON on stdout, including
 `complete:false` previews, digest mismatches, incomplete-plan write refusals, and

@@ -81,7 +81,9 @@ Projected mode accepts a stable id plus a configured root, never an arbitrary
 future filesystem path, so a caller cannot direct repairs at a location the
 project does not already own. It is also why an owner already sitting at the
 destination becomes settled verification instead of an error: proving scoped
-destinations are canonical is exactly what a retry or a final close check needs.
+destinations still resolve to their intended targets is exactly what a retry or
+a final close check needs. Canonical normalization remains an ordinary global-
+relink concern.
 
 Workspace rituals and relevance or filing judgment remain outside Slopid.
 

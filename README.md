@@ -126,15 +126,14 @@ to decode to the destination the parser reported, and every replacement is
 proven to reparse to the intended destination before it becomes write authority.
 A destination whose span or representation cannot be proven yields
 `unreadable-entry` and makes the result incomplete instead of being guessed or
-quietly dropped. Settled verification requires canonical text only where Slopid
-can produce it — a destination carrying one recognized ref, which global relink
-normalizes — and verifies generic ref-less and multi-ref paths by whether they
-resolve or are proven absent. Proven absence remains a warning in settled
-verification. Ambiguity, unknown inspection state, unsafe representation, and
-actual move-caused drift remain errors. Only `NotFound` proves absence; any
-other inspection error refuses. Aggregate close callers must display warnings
-and bind intentional owned-resource retirement consequences into their
-destructive preview rather than converting them into late terminal failures.
+quietly dropped. Settled verification judges recognized-ref and generic
+destinations by preserved, unambiguous resolution to their intended targets;
+ordinary global relink still owns canonical spelling. Recognized missing-target
+and ambiguity failures remain errors, while generic proven absence remains a
+warning. Unknown inspection state, unsafe representation, and actual move-caused
+drift also remain errors. Only `NotFound` proves absence; any other inspection
+error refuses. Slopid reports observed link and filesystem state and does not
+model cleanup-resource lifecycle.
 
 ### Authored-writer quiescence
 
