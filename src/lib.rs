@@ -30,6 +30,15 @@ pub fn main_entry() {
 
 fn run(cli: Cli) -> Result<i32> {
     match cli.command {
+        Command::Root { human } => {
+            let cwd = std::env::current_dir()?;
+            let result = commands::cmd_root(&cwd)?;
+            if human {
+                print!("{}", commands::render_root_human(&result));
+            } else {
+                output(&result)?;
+            }
+        }
         Command::New {
             title,
             from_seed,

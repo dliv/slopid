@@ -9,6 +9,7 @@ mod new;
 mod note;
 mod reader;
 mod relink;
+mod root;
 mod search;
 mod seed;
 
@@ -21,5 +22,6 @@ pub use new::*;
 pub use note::*;
 pub use reader::*;
 pub use relink::*;
+pub use root::*;
 pub use search::*;
 pub use seed::*;

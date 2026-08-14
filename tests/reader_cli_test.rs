@@ -317,6 +317,7 @@ fn agent_instructions_teach_exact_reader_usage() {
     let value = json(&output);
     let text = value["text"].as_str().unwrap();
     for example in [
+        "sid root",
         "sid resolve se2vv",
         "sid graph sdz85",
         "sid lint",

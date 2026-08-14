@@ -16,6 +16,7 @@ Topic roots are explicit; seed and note roots default beneath the configured tas
 root. Generated refs default to the built-in prude deny-prefix list. A present
 `[ref].deny_prefixes` array replaces it exactly; an empty array allows every
 otherwise valid generated ref.
+Use `sid root` to read the configured active task root as JSON without creating it.
 Use `sid new \"task title\"` when starting a durable task folder.
 Use `sid new --dry-run \"task title\"` to preview the folder path.
 Use `sid new --into .slow \"task title\"` to allocate into a configured scan root.

@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
     name = "sid",
     version = env!("CARGO_PKG_VERSION"),
     about = "Use a deterministic local STM protocol with JSON results",
-    after_help = "Read/query: list, resolve, graph, lint, search, context, captures\nControlled mutation: new, note, seed, relink --write\nSafe default: relink previews; inspect complete, applied, changes, and findings\n\nFor AI agent usage instructions: sid agent-instructions"
+    after_help = "Read/query: root, list, resolve, graph, lint, search, context, captures\nControlled mutation: new, note, seed, relink --write\nSafe default: relink previews; inspect complete, applied, changes, and findings\n\nFor AI agent usage instructions: sid agent-instructions"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -14,6 +14,14 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Print the configured active task root
+    Root {
+        /// Plain path output for direct human use instead of JSON
+        /// (agents should parse the default JSON)
+        #[arg(long)]
+        human: bool,
+    },
+
     /// Allocate a new task folder id
     New {
         /// Human task title, normalized into the id slug

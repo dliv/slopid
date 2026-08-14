@@ -811,6 +811,7 @@ fn help_and_agent_instructions_describe_read_query_commands() {
         .clone();
     let text = json(&output)["text"].as_str().unwrap().to_string();
     for phrase in [
+        "sid root",
         "sid search",
         "sid context",
         "sid captures",

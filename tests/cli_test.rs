@@ -184,6 +184,76 @@ fn new_creates_task_folder_and_prints_json_by_default() {
 }
 
 #[test]
+fn root_returns_default_active_root_as_json_without_creating_it() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    let output = bin_cmd()
+        .arg("root")
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json = parse_stdout_json(&output);
+    assert_json_keys(&json, &["root"]);
+    assert_eq!(
+        PathBuf::from(json["root"].as_str().unwrap()),
+        tmp.path().canonicalize().unwrap().join("stm")
+    );
+    assert!(!tmp.path().join("stm").exists());
+}
+
+#[test]
+fn root_discovers_nearest_config_upward_and_resolves_custom_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join(".sid"), "[task]\nroot = \"work/tasks\"\n").unwrap();
+    let nested = tmp.path().join("one/two");
+    std::fs::create_dir_all(&nested).unwrap();
+
+    let output = bin_cmd()
+        .arg("root")
+        .current_dir(&nested)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json = parse_stdout_json(&output);
+    assert_json_keys(&json, &["root"]);
+    assert_eq!(
+        PathBuf::from(json["root"].as_str().unwrap()),
+        tmp.path().canonicalize().unwrap().join("work/tasks")
+    );
+    assert!(!tmp.path().join("work/tasks").exists());
+}
+
+#[test]
+fn root_human_prints_only_the_active_root_path() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    let output = bin_cmd()
+        .args(["root", "--human"])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    assert_eq!(
+        String::from_utf8(output).unwrap(),
+        format!(
+            "{}\n",
+            tmp.path().canonicalize().unwrap().join("stm").display()
+        )
+    );
+    assert!(!tmp.path().join("stm").exists());
+}
+
+#[test]
 fn new_uses_configured_active_root() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join(".sid"), "[task]\nroot = \"work/tasks\"\n").unwrap();
