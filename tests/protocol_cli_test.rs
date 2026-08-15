@@ -12,6 +12,28 @@ fn json(bytes: &[u8]) -> Value {
     serde_json::from_slice(bytes).unwrap()
 }
 
+/// Run `sid lint` and return its finding codes, proving at every call site that
+/// the process status agrees with the report's own coverage and health verdict.
+fn identity_lint_codes(base: &Path) -> Vec<String> {
+    let output = sid().arg("lint").current_dir(base).output().unwrap();
+    let value = json(&output.stdout);
+    let expected = match (
+        value["complete"].as_bool().unwrap(),
+        value["healthy"].as_bool().unwrap(),
+    ) {
+        (false, _) => 2,
+        (true, false) => 1,
+        (true, true) => 0,
+    };
+    assert_eq!(output.status.code(), Some(expected), "{value}");
+    value["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|finding| finding["code"].as_str().unwrap().to_string())
+        .collect()
+}
+
 fn write_canonical(path: &Path, frontmatter: &str, body: &str) {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).unwrap();
@@ -303,23 +325,13 @@ fn malformed_seed_and_topic_are_omitted_without_hiding_healthy_nodes() {
         "type: \"task\"\nid: \"sc4c9\"\ntitle: \"Wrong kind\"\ntimestamp: \"2024-05-02\"\n",
         "",
     );
-    let lint = sid()
-        .arg("lint")
-        .current_dir(tmp.path())
-        .assert()
-        .code(1)
-        .get_output()
-        .stdout
-        .clone();
-    let value = json(&lint);
-    let codes = value["findings"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|finding| finding["code"].as_str().unwrap())
-        .collect::<Vec<_>>();
-    assert!(codes.contains(&"id-folder-mismatch"));
-    assert!(codes.contains(&"unsupported-type"));
+    // Frontmatter identity and type are Slopdeck's task-memory concern now.
+    // Both malformed documents reserve unique, recognized refs, so identity
+    // lint reports only the fixture's legacy four-character folder ref.
+    assert_eq!(
+        identity_lint_codes(tmp.path()),
+        ["identity-folder-ref-invalid"]
+    );
 
     let healthy = sid()
         .args(["resolve", "sa2a7"])
@@ -612,15 +624,12 @@ fn hidden_note_root_metadata_is_not_a_capture_or_search_result() {
             .ends_with("visible.txt")
     );
 
-    let lint = sid()
-        .arg("lint")
-        .current_dir(tmp.path())
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    assert_eq!(json(&lint)["findings"], serde_json::json!([]));
+    // The note root is not an allocation root, so identity lint never sees it.
+    // The only finding is the fixture's legacy four-character folder ref.
+    assert_eq!(
+        identity_lint_codes(tmp.path()),
+        ["identity-folder-ref-invalid"]
+    );
 }
 
 #[test]
@@ -682,7 +691,7 @@ fn context_embeds_graph_and_pending_inbox_envelopes_without_bodies() {
 }
 
 #[test]
-fn invalid_inbox_is_partial_context_and_a_lint_data_error() {
+fn invalid_inbox_is_partial_context_and_never_an_identity_lint_finding() {
     let tmp = typed_project();
     let inbox = tmp.path().join("work/202402_sa2a7_task/inbox");
     fs::create_dir_all(&inbox).unwrap();
@@ -710,25 +719,16 @@ fn invalid_inbox_is_partial_context_and_a_lint_data_error() {
             .any(|finding| finding["code"] == "invalid-inbox-envelope")
     );
 
-    let lint = sid()
-        .arg("lint")
-        .current_dir(tmp.path())
-        .assert()
-        .code(1)
-        .get_output()
-        .stdout
-        .clone();
-    assert!(
-        json(&lint)["findings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|finding| finding["code"] == "invalid-inbox-envelope")
+    // Inbox envelope validity belongs to Slopdeck's composed lint; `sid lint`
+    // never opens the message.
+    assert_eq!(
+        identity_lint_codes(tmp.path()),
+        ["identity-folder-ref-invalid"]
     );
 }
 
 #[test]
-fn stale_queue_findings_are_warning_only_for_lint() {
+fn stale_queue_findings_stay_in_context_and_never_reach_identity_lint() {
     let tmp = typed_project();
     let inbox = tmp.path().join("work/202402_sa2a7_task/inbox");
     fs::create_dir_all(&inbox).unwrap();
@@ -737,22 +737,27 @@ fn stale_queue_findings_are_warning_only_for_lint() {
         "from: \"816d\"\ndate: \"2020-01-01\"\nsubject: \"Old\"\n",
         "body",
     );
-    let output = sid()
-        .arg("lint")
+    let context = sid()
+        .args(["context", "sa2a7"])
         .current_dir(tmp.path())
         .assert()
         .success()
         .get_output()
         .stdout
         .clone();
-    let value = json(&output);
-    let stale = value["findings"]
+    let stale = json(&context)["inbox"]["findings"]
         .as_array()
         .unwrap()
         .iter()
         .find(|finding| finding["code"] == "stale-inbox-message")
+        .cloned()
         .unwrap();
     assert_eq!(stale["severity"], "warning");
+
+    assert_eq!(
+        identity_lint_codes(tmp.path()),
+        ["identity-folder-ref-invalid"]
+    );
 }
 
 #[test]

@@ -200,10 +200,22 @@ fn graph_collapses_duplicate_edges_omits_self_edges_and_terminates_cycles() {
     assert!(value["findings"].as_array().unwrap().is_empty());
 }
 
+/// Every entry type that reserves a ref is valid identity: folders, files, and
+/// symlinks alike. Names that do not parse as `{YYYYMM}_{ref}` — dot entries,
+/// invalid periods, and arbitrary names — are ignored, and a configured root
+/// that does not exist yet is an empty namespace rather than a defect.
 #[test]
-fn lint_clean_scan_exits_zero_with_exact_json() {
+fn lint_reports_a_clean_identity_namespace_and_exits_zero() {
     let tmp = project();
-    seed_graph(tmp.path());
+    fs::create_dir_all(tmp.path().join("stm/202401_sa2a7_folder")).unwrap();
+    fs::create_dir_all(tmp.path().join("stm/.archive")).unwrap();
+    fs::write(tmp.path().join("stm/202402_sb3b8_export.zip"), "reserved").unwrap();
+    std::os::unix::fs::symlink("../nowhere", tmp.path().join("stm/202403_sc4c9_moved-away"))
+        .unwrap();
+    fs::create_dir_all(tmp.path().join("stm/2026_sd5d2_bad-period")).unwrap();
+    fs::create_dir_all(tmp.path().join("stm/.hidden")).unwrap();
+    fs::write(tmp.path().join("stm/README.md"), "ignored").unwrap();
+
     let output = sid()
         .arg("lint")
         .current_dir(tmp.path())
@@ -212,71 +224,129 @@ fn lint_clean_scan_exits_zero_with_exact_json() {
         .get_output()
         .stdout
         .clone();
-    let value = json(&output);
     assert_eq!(
-        value.as_object().unwrap().keys().collect::<Vec<_>>(),
-        ["findings"]
+        json(&output),
+        serde_json::json!({
+            "complete": true,
+            "healthy": true,
+            "findings": []
+        })
     );
-    assert_eq!(value["findings"], serde_json::json!([]));
 }
 
+/// An unrecognized ref under a valid period and one ref reserved twice across
+/// two configured allocation roots are fully observed namespace defects: the
+/// report stays complete, turns unhealthy, and exits one.
 #[test]
-fn lint_data_errors_exit_one_with_complete_json() {
+fn lint_reports_invalid_and_duplicate_refs_as_complete_errors() {
     let tmp = project();
-    entry(
-        tmp.path(),
-        "stm",
-        "202401_sa2a7_bad",
-        "type: \"task\"\nid: \"sa2a7\"\ntitle: \"Bad\"\ntimestamp: \"not-a-date\"\nstatus: \"ACTIVE\"\nrelated: [\"missing\"]\n",
-        "",
-    );
+    fs::create_dir_all(tmp.path().join("stm/202401_sa2a7_one")).unwrap();
+    fs::create_dir_all(tmp.path().join("stm/.archive/202312_sa2a7_older")).unwrap();
+    fs::create_dir_all(tmp.path().join("stm/202405_816d_legacy")).unwrap();
+
     let output = sid()
         .arg("lint")
         .current_dir(tmp.path())
         .assert()
         .code(1)
         .get_output()
+        .stdout
         .clone();
-    let value = json(&output.stdout);
+    let value = json(&output);
+    assert_eq!(value["complete"], true);
+    assert_eq!(value["healthy"], false);
+    let findings = value["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 2, "{findings:?}");
+    assert_eq!(findings[0]["code"], "identity-folder-ref-invalid");
+    assert_eq!(findings[0]["severity"], "error");
+    assert_eq!(findings[0]["ref_id"], "816d");
+    assert_eq!(findings[0]["path"], "stm/202405_816d_legacy");
+    assert_eq!(findings[1]["code"], "identity-ref-duplicate");
+    assert_eq!(findings[1]["ref_id"], "sa2a7");
+    assert_eq!(findings[1]["path"], serde_json::Value::Null);
+    let duplicate = findings[1]["message"].as_str().unwrap();
     assert!(
-        value["findings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|finding| finding["code"] == "invalid-required-field")
+        duplicate.contains("stm/.archive/202312_sa2a7_older"),
+        "{duplicate}"
     );
-    assert!(
-        value["findings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|finding| finding["code"] == "forbidden-status")
-    );
-    assert!(
-        value["findings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|finding| finding["code"] == "dangling-edge")
-    );
+    assert!(duplicate.contains("stm/202401_sa2a7_one"), "{duplicate}");
+    for finding in findings {
+        let path = finding["path"].as_str().unwrap_or_default();
+        assert!(!path.starts_with('/'), "{path} must be config-relative");
+        assert!(
+            !finding["message"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("{}", tmp.path().display())),
+            "message leaked an absolute path"
+        );
+    }
 }
 
+/// An unreadable configured root is a coverage failure, not a data verdict:
+/// the partial report is still emitted and the process exits two.
 #[test]
-fn lint_operational_failure_exits_two_with_empty_stdout() {
+fn lint_reports_an_unreadable_root_as_an_incomplete_report() {
     let tmp = project();
-    fs::write(tmp.path().join("stm"), "not a directory").unwrap();
+    fs::create_dir_all(tmp.path().join("stm")).unwrap();
+    fs::write(tmp.path().join("stm/.archive"), "not a directory").unwrap();
+
     let output = sid()
         .arg("lint")
         .current_dir(tmp.path())
         .assert()
         .code(2)
         .get_output()
+        .stdout
         .clone();
-    assert!(output.stdout.is_empty());
-    assert!(
-        String::from_utf8(output.stderr)
-            .unwrap()
-            .contains("cannot complete lint scan")
+    let value = json(&output);
+    assert_eq!(value["complete"], false);
+    let findings = value["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0]["code"], "identity-root-unreadable");
+    assert_eq!(findings[0]["path"], "stm/.archive");
+}
+
+/// The executable proof that identity lint opens no authored Markdown: a
+/// canonical folder whose entrypoint is not even UTF-8, an invalid inbox
+/// envelope, a capture note, and a topic document all stay healthy while the
+/// folder names remain unique.
+#[test]
+fn lint_ignores_authored_documents_and_non_allocation_roots() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(
+        tmp.path().join(".sid"),
+        "[task]\nroot = \"stm\"\nscan_roots = [\"stm/.archive\"]\n[note]\nroot = \"stm/.notes\"\n[topic]\nroots = [\"knowledge\"]\n",
+    )
+    .unwrap();
+    let folder = tmp.path().join("stm/202401_sa2a7_task");
+    fs::create_dir_all(folder.join("inbox")).unwrap();
+    fs::write(folder.join("CURRENT_STATE.md"), [0xff, 0xfe, 0x00, 0x6e]).unwrap();
+    fs::write(folder.join("inbox/bad.md"), "not an envelope at all").unwrap();
+    fs::create_dir_all(tmp.path().join("stm/.notes")).unwrap();
+    fs::write(
+        tmp.path().join("stm/.notes/202401_note.md"),
+        "---\nbroken\n",
+    )
+    .unwrap();
+    fs::create_dir_all(tmp.path().join("knowledge")).unwrap();
+    fs::write(tmp.path().join("knowledge/guide.md"), "---\nbroken\n").unwrap();
+
+    let output = sid()
+        .arg("lint")
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(
+        json(&output),
+        serde_json::json!({
+            "complete": true,
+            "healthy": true,
+            "findings": []
+        })
     );
 }
 

@@ -90,7 +90,8 @@ pub enum Command {
         edges: Vec<crate::commands::GraphEdgeType>,
     },
 
-    /// Audit STM frontmatter and relationship integrity as stable JSON
+    /// Audit direct-child folder identity across the configured allocation
+    /// roots as stable JSON; exits 0 healthy, 1 unhealthy, 2 incomplete
     Lint,
 
     /// Search authored text and captures as deterministic JSON

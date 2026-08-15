@@ -72,7 +72,7 @@ sid new                 Allocate or graduate a task folder
 sid list                List task folders and reservations
 sid resolve             Resolve one canonical id
 sid graph               Read a relationship component
-sid lint                Audit frontmatter and relationships
+sid lint                Audit direct-child folder identity
 sid search              Search authored text and captures
 sid context             Read one task graph and pending inbox
 sid captures            Inventory pending notes and seeds
@@ -86,6 +86,32 @@ sid init                Write the default .sid configuration
 Read/query commands emit JSON by default. `sid list --human` is an explicitly
 non-contractual display mode for direct use. Mutations expose dry-run or preview
 paths where applicable; `sid relink` does not write unless passed `--write`.
+
+### Identity lint
+
+`sid lint` audits folder identity and nothing else. It scans the direct
+children of every configured allocation root — the task scan roots plus the
+seed root, which all reserve one ref namespace — and reports four things:
+
+```text
+identity-folder-ref-invalid   valid six-digit period, unrecognized ref
+identity-ref-duplicate        one ref reserved by more than one direct child
+identity-root-unreadable      a configured root could not be enumerated
+identity-entry-unreadable     a directory entry could not be read
+```
+
+The report is `{"complete": bool, "healthy": bool, "findings": [...]}`, with
+locators relative to the project base. `complete` describes coverage and
+`healthy` describes validity, so the process exits `0` for a complete healthy
+report, `1` for a complete report containing errors, and `2` for an incomplete
+one. Warnings alone stay successful.
+
+Lint never opens `CURRENT_STATE.md`, an inbox message, a capture note, or a
+topic document, and it never follows an entry: a period-and-ref-shaped file or
+symlink is a valid reservation, because allocation must not reuse its ref. A
+configured root that does not exist yet is an empty namespace. Entrypoint
+frontmatter, relationship, inbox, and lifecycle-view health belong to the
+task-memory layer above Slopid, not to this command.
 
 ### Move-projected relink
 

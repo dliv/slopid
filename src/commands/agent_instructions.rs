@@ -24,7 +24,15 @@ Use `sid list` to see existing folders and reservations, newest-touched first.
 Filter with terms: `sid list delivery triage` (slug words) or `sid list sd` (ref prefix).
 Use `sid resolve se2vv` to resolve one exact, case-sensitive canonical frontmatter id.
 Use `sid graph sdz85` to read its complete incoming and outgoing relationship component.
-Use `sid lint` to audit the configured STM roots with stable finding codes.
+Use `sid lint` to audit direct-child folder identity across the configured
+allocation roots. It reports only an unrecognized ref under a valid six-digit
+period, one ref reserved by more than one direct child, and a root or entry it
+could not read. It never opens `CURRENT_STATE.md`, an inbox, a note, or a topic
+document, and a period-and-ref-shaped file or symlink is a valid reservation
+rather than a finding. The report is `complete`, `healthy`, and `findings` with
+project-relative locators; the process exits 0 complete-healthy, 1
+complete-unhealthy, and 2 incomplete. Entrypoint frontmatter, relationship,
+inbox, and lifecycle-view health belong to the task-memory layer above Slopid.
 Use `sid search mapper websocket` for literal AND search across authored text.
 Use `sid context se2vv` for one task/review graph plus its pending inbox envelopes.
 Use `sid captures` to inventory pending notes and seeds without returning note bodies.

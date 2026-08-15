@@ -81,14 +81,10 @@ fn run(cli: Cli) -> Result<i32> {
         }
         Command::Lint => {
             let cwd = std::env::current_dir()?;
+            // The report is always the answer, including the partial one: an
+            // agent needs the findings it could observe alongside the status.
             let execution = commands::cmd_lint(&cwd)?;
-            if let Some(result) = execution.result {
-                output(&result)?;
-            } else {
-                eprintln!(
-                    "error: cannot complete lint scan because a configured root or entrypoint is unreadable"
-                );
-            }
+            output(&execution.report)?;
             return Ok(execution.exit_code);
         }
         Command::Search { terms, limit } => {

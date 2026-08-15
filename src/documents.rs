@@ -144,6 +144,11 @@ impl Finding {
         ) && self.message.contains("id"))
     }
 
+    /// Retained workflow-index classification. Its consumer moved to
+    /// Slopdeck's composed lint; the document index itself still backs
+    /// `resolve`, `graph`, `context`, `search`, `seed`, and `relink` until P9
+    /// decides which of those commands Slopid keeps.
+    #[allow(dead_code)]
     pub fn is_operational(&self) -> bool {
         matches!(
             self.code,
@@ -206,6 +211,8 @@ impl DocumentIndex {
         !self.findings.iter().any(Finding::affects_completeness)
     }
 
+    /// Retained alongside [`Finding::is_operational`] for the same reason.
+    #[allow(dead_code)]
     pub fn operationally_complete(&self) -> bool {
         !self.findings.iter().any(Finding::is_operational)
     }
