@@ -86,9 +86,9 @@ fn run(cli: Cli) -> Result<i32> {
             let cwd = std::env::current_dir()?;
             output(&commands::cmd_search(terms, limit, &cwd)?)?;
         }
-        Command::Context { id } => {
+        Command::Context { id, depth } => {
             let cwd = std::env::current_dir()?;
-            output(&commands::cmd_context(&id, &cwd)?)?;
+            output(&commands::cmd_context(&id, depth, &cwd)?)?;
         }
         Command::Captures => {
             let cwd = std::env::current_dir()?;

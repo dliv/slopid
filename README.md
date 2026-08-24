@@ -87,6 +87,12 @@ Read/query commands emit JSON by default. `sid list --human` is an explicitly
 non-contractual display mode for direct use. Mutations expose dry-run or preview
 paths where applicable; `sid relink` does not write unless passed `--write`.
 
+`sid context <ID>` preserves the complete connected-component graph by default.
+Use `sid context <ID> --depth 0` for the anchor alone or `--depth 1` for the
+anchor and its direct relationship neighbors. A depth bound changes only which
+graph nodes and internal edges are returned; corpus-wide completeness and
+findings, plus the anchor's pending inbox, remain intact.
+
 ### Move-projected relink
 
 `sid relink` repairs every destination it can prove. To instead repair only what

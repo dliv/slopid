@@ -25,7 +25,9 @@ Use `sid resolve se2vv` to resolve one exact, case-sensitive canonical frontmatt
 Use `sid graph sdz85` to read its complete incoming and outgoing relationship component.
 Use `sid lint` to audit the configured STM roots with stable finding codes.
 Use `sid search mapper websocket` for literal AND search across authored text.
-Use `sid context se2vv` for one task/review graph plus its pending inbox envelopes.
+Use `sid context se2vv` for one task/review's unbounded graph plus its pending inbox envelopes.
+Use `sid context se2vv --depth 1` to select only the anchor and its direct graph neighbors.
+Context depth changes graph selection only; corpus-wide completeness and findings remain visible.
 Use `sid captures` to inventory pending notes and seeds without returning note bodies.
 Use `sid note \"raw thought\"` or pipe stdin to capture one identity-free note.
 Inspect note `state`; suspected secrets return `quarantined` and are not echoed.

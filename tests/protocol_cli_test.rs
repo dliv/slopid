@@ -682,6 +682,199 @@ fn context_embeds_graph_and_pending_inbox_envelopes_without_bodies() {
 }
 
 #[test]
+fn context_without_depth_preserves_the_unbounded_graph_contract() {
+    let tmp = typed_project();
+
+    let output = sid()
+        .args(["context", "sa2a7"])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value = json(&output);
+
+    assert_eq!(keys(&value), ["complete", "graph", "inbox", "node"]);
+    assert_eq!(value["complete"], true);
+    assert_eq!(value["node"]["frontmatter"]["id"], "sa2a7");
+    assert_eq!(
+        value["graph"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|node| node["frontmatter"]["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["816d", "sa2a7", "sb3b8", "topic/guide"]
+    );
+    assert_eq!(value["graph"]["edges"].as_array().unwrap().len(), 3);
+}
+
+#[test]
+fn context_depth_zero_keeps_the_anchor_inbox_and_corpus_findings() {
+    let tmp = typed_project();
+    fs::create_dir_all(tmp.path().join("work/202405_sc4c9_missing")).unwrap();
+    write_canonical(
+        &tmp.path().join("work/202402_sa2a7_task/inbox/pending.md"),
+        "from: \"816d\"\ndate: \"2099-01-01\"\nsubject: \"Still pending\"\n",
+        "private body",
+    );
+
+    let output = sid()
+        .args(["context", "sa2a7", "--depth", "0"])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value = json(&output);
+
+    assert_eq!(value["complete"], false);
+    assert_eq!(value["node"]["frontmatter"]["id"], "sa2a7");
+    assert_eq!(value["graph"]["complete"], false);
+    assert_eq!(
+        value["graph"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|node| node["frontmatter"]["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["sa2a7"]
+    );
+    assert!(value["graph"]["edges"].as_array().unwrap().is_empty());
+    assert!(
+        value["graph"]["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| finding["code"] == "missing-entrypoint")
+    );
+    assert_eq!(value["inbox"]["complete"], true);
+    assert_eq!(
+        value["inbox"]["messages"][0]["frontmatter"]["subject"],
+        "Still pending"
+    );
+    assert!(!String::from_utf8(output).unwrap().contains("private body"));
+}
+
+#[test]
+fn context_depth_one_selects_the_direct_mixed_neighborhood_and_internal_edges() {
+    let tmp = typed_project();
+    write_canonical(
+        &tmp.path().join("work/202402_sa2a7_task/CURRENT_STATE.md"),
+        "type: \"task\"\nid: \"sa2a7\"\ntitle: \"Task\"\ntimestamp: \"2024-02-01\"\norigin: [\"816d\"]\n",
+        "## Related Work\n- 816d\n",
+    );
+    write_canonical(
+        &tmp.path().join("knowledge/nested/guide.md"),
+        "type: \"topic\"\nid: \"topic/guide\"\ntitle: \"Guide\"\ntimestamp: \"2024-04-01\"\nrelated: [\"sb3b8\", \"sa2a7\"]\n",
+        "## Related Work\n- sb3b8\n- sa2a7\n",
+    );
+    write_canonical(
+        &tmp.path().join("work/202405_sc4c9_far/CURRENT_STATE.md"),
+        "type: \"task\"\nid: \"sc4c9\"\ntitle: \"Far\"\ntimestamp: \"2024-05-01\"\nrelated: [\"topic/guide\"]\n",
+        "## Related Work\n- topic/guide\n",
+    );
+
+    let output = sid()
+        .args(["context", "sa2a7", "--depth", "1"])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value = json(&output);
+
+    assert_eq!(value["complete"], true);
+    assert_eq!(
+        value["graph"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|node| node["frontmatter"]["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["816d", "sa2a7", "sb3b8", "topic/guide"]
+    );
+    assert_eq!(
+        value["graph"]["edges"],
+        serde_json::json!([
+            {"type": "origin", "source": "sa2a7", "target": "816d"},
+            {"type": "origin", "source": "sb3b8", "target": "sa2a7"},
+            {"type": "related", "source": "topic/guide", "target": "sa2a7"},
+            {"type": "related", "source": "topic/guide", "target": "sb3b8"}
+        ])
+    );
+    assert!(
+        value["graph"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|node| node["frontmatter"]["id"] != "sc4c9")
+    );
+}
+
+#[test]
+fn context_depth_one_bounds_a_large_connected_component() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(
+        tmp.path().join(".sid"),
+        "[task]\nroot = \"work\"\n[topic]\nroots = [\"knowledge\"]\n",
+    )
+    .unwrap();
+    write_canonical(
+        &tmp.path().join("work/202402_sa2a7_task/CURRENT_STATE.md"),
+        "type: \"task\"\nid: \"sa2a7\"\ntitle: \"Task\"\ntimestamp: \"2024-02-01\"\nrelated: [\"topic/chain-00\"]\n",
+        "## Related Work\n- topic/chain-00\n",
+    );
+    for index in 0..64 {
+        let id = format!("topic/chain-{index:02}");
+        let next = (index < 63).then(|| format!("topic/chain-{:02}", index + 1));
+        let relationships = next
+            .as_ref()
+            .map_or_else(String::new, |next| format!("related: [\"{next}\"]\n"));
+        let body = next
+            .as_ref()
+            .map_or_else(String::new, |next| format!("## Related Work\n- {next}\n"));
+        write_canonical(
+            &tmp.path().join(format!("knowledge/chain-{index:02}.md")),
+            &format!(
+                "type: \"topic\"\nid: \"{id}\"\ntitle: \"Chain {index:02}\"\ntimestamp: \"2024-03-01\"\n{relationships}"
+            ),
+            &body,
+        );
+    }
+
+    let unbounded = sid()
+        .args(["context", "sa2a7"])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let bounded = sid()
+        .args(["context", "sa2a7", "--depth", "1"])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    assert_eq!(
+        json(&unbounded)["graph"]["nodes"].as_array().unwrap().len(),
+        65
+    );
+    assert_eq!(
+        json(&bounded)["graph"]["nodes"].as_array().unwrap().len(),
+        2
+    );
+    assert!(bounded.len() * 4 < unbounded.len());
+}
+
+#[test]
 fn invalid_inbox_is_partial_context_and_a_lint_data_error() {
     let tmp = typed_project();
     let inbox = tmp.path().join("work/202402_sa2a7_task/inbox");
@@ -785,6 +978,21 @@ fn help_and_agent_instructions_describe_read_query_commands() {
         assert!(String::from_utf8(help).unwrap().contains("JSON"));
     }
 
+    let context_help = sid()
+        .args(["context", "--help"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let context_help = String::from_utf8(context_help).unwrap();
+    for phrase in ["--depth <DEPTH>", "Maximum shortest-hop distance"] {
+        assert!(
+            context_help.contains(phrase),
+            "context help omitted {phrase}"
+        );
+    }
+
     let relink_help = sid()
         .args(["relink", "--help"])
         .assert()
@@ -813,6 +1021,7 @@ fn help_and_agent_instructions_describe_read_query_commands() {
     for phrase in [
         "sid search",
         "sid context",
+        "sid context se2vv --depth 1",
         "sid captures",
         "complete",
         "note bodies",
