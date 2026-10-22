@@ -34,7 +34,9 @@ project-relative locators; the process exits 0 complete-healthy, 1
 complete-unhealthy, and 2 incomplete. Entrypoint frontmatter, relationship,
 inbox, and lifecycle-view health belong to the task-memory layer above Slopid.
 Use `sid search mapper websocket` for literal AND search across authored text.
-Use `sid context se2vv` for one task/review graph plus its pending inbox envelopes.
+Use `sid context se2vv` for one task/review's unbounded graph plus its pending inbox envelopes.
+Use `sid context se2vv --depth 1` to select only the anchor and its direct graph neighbors.
+Context depth changes graph selection only; corpus-wide completeness and findings remain visible.
 Use `sid captures` to inventory pending notes and seeds without returning note bodies.
 Use `sid note \"raw thought\"` or pipe stdin to capture one identity-free note.
 Inspect note `state`; suspected secrets return `quarantined` and are not echoed.

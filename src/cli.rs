@@ -109,6 +109,10 @@ pub enum Command {
     Context {
         /// Exact folder-backed task or review id
         id: String,
+
+        /// Maximum shortest-hop distance from the anchor
+        #[arg(long)]
+        depth: Option<usize>,
     },
 
     /// Inventory pending notes and parked seeds as JSON without note bodies

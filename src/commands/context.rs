@@ -48,7 +48,7 @@ pub struct CapturesResult {
     pub findings: Vec<Finding>,
 }
 
-pub fn cmd_context(id: &str, cwd: &Path) -> Result<ContextResult> {
+pub fn cmd_context(id: &str, depth: Option<usize>, cwd: &Path) -> Result<ContextResult> {
     let config = load_project_config(cwd)?;
     let index = documents::scan_sources(&config.document_sources());
     let Some(record) = index.nodes.get(id) else {
@@ -63,7 +63,7 @@ pub fn cmd_context(id: &str, cwd: &Path) -> Result<ContextResult> {
         config.stale_after_days,
         Utc::now().date_naive(),
     );
-    let graph = cmd_graph(id, None, GraphDirection::Both, &[], cwd)?;
+    let graph = cmd_graph(id, depth, GraphDirection::Both, &[], cwd)?;
     Ok(ContextResult {
         complete: graph.complete && inbox.complete,
         node,

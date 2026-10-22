@@ -90,9 +90,15 @@ is shown from its start. Path-only excerpts have null line/text. Invalid UTF-8 i
 non-text. Read failures produce partial exit-0 results; no usable configured
 source fails with empty stdout.
 
-`sid context <ID>` accepts exactly one folder-backed task/review id. Success
-contains exactly `complete`, `node`, `graph`, and `inbox`; `graph` is the bare
-graph result. Inbox contains exactly `complete`, `messages`, and `findings`.
+`sid context <ID> [--depth N]` accepts exactly one folder-backed task/review id.
+Omitted depth preserves the unbounded graph result. A supplied depth uses the
+same shortest-hop selection as `sid graph`, with the anchor at zero; every
+authored edge whose endpoints are selected is returned. Depth changes graph
+selection only, so graph completeness and findings continue to describe the
+entire scanned corpus. Success contains exactly `complete`, `node`, `graph`,
+and `inbox`; `graph` is the bare graph result, and top-level completeness is the
+conjunction of graph and inbox completeness. Inbox contains exactly `complete`,
+`messages`, and `findings`.
 Only top-level `inbox/*.md` is read. Each valid message contains exactly its
 absolute `path` and complete `frontmatter`; bodies and `done/` are excluded.
 Required nonempty strings are `from`, real `YYYY-MM-DD` `date`, and `subject`.
