@@ -1,7 +1,9 @@
 # 7. Tolerant Reader Results
 
 Date: 2026-07-12
-Status: Accepted
+Status: Accepted; lint decision superseded by
+[ADR 0009](0009-identity-only-lint.md) in v0.4.0. The historical decision below
+remains the rationale for tolerant document readers.
 
 ## Context
 

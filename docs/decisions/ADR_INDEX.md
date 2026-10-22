@@ -16,7 +16,9 @@ one slice.
   (amended by ADR 0006)
 - [6. Opt-In Human Output For Discovery Commands](0006-opt-in-human-output-for-discovery.md)
 - [7. Tolerant Reader Results](0007-tolerant-reader-results.md)
+  (lint portion superseded by ADR 0009)
 - [8. Deterministic Protocol And Controlled Mutations](0008-deterministic-protocol-and-controlled-mutations.md)
+- [9. Identity-Only Lint](0009-identity-only-lint.md)
 
 ## Notes
 

@@ -54,7 +54,10 @@ The list is a closed set of kebab-case names. Unknown names fail config parsing.
 Omitting `[relink]`, omitting `destination_extensions`, or setting it to `[]`
 are equivalent. `sid init` continues to omit this default-off optional table.
 
-`sid resolve`, `sid graph`, and `sid lint` use the composed canonical index.
+`sid resolve` and `sid graph` use the composed canonical index. Since v0.4.0,
+`sid lint` instead scans allocation identity without opening documents;
+[contract 0007](0007-root-and-identity-lint.md) supersedes its former composed
+index and queue-audit behavior.
 Task/review nodes retain Contract 0004 ordering. They sort before file-backed
 nodes; seed/topic nodes sort by timestamp, id, and path. The seed filename's
 embedded ref must match its canonical id. Topic identity is explicit
@@ -119,9 +122,10 @@ excluded from both commands.
 The default stale threshold is seven UTC calendar days; zero disables stale
 warnings. Age six is clear and age seven warns. `stale-inbox-message` and
 `stale-capture-note` are warning-only. `invalid-inbox-envelope` is a data
-error. `unreadable-inbox-message` and `unreadable-capture-note` are operational
-for lint: lint exits 2 with empty stdout. Context and captures keep independent
-partial exit-0 envelopes for those individual failures.
+error. `unreadable-inbox-message` and `unreadable-capture-note` mark incomplete
+queue observations. Context and captures keep independent partial exit-0
+envelopes for those individual failures. None of these document or queue
+findings is emitted by identity-only `sid lint`.
 
 ## Controlled capture and seed mutations
 

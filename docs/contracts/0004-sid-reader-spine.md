@@ -1,7 +1,10 @@
 # Contract 0004: sid reader spine
 
 Date: 2026-07-12
-Status: Implemented
+Status: Implemented; lint portion superseded in v0.4.0 by
+[contract 0007](0007-root-and-identity-lint.md). The historical lint shape and
+codes below describe v0.3.x, not the current `sid lint` command. Resolve and
+graph retain their document-reader contracts.
 
 ## Scope and source model
 

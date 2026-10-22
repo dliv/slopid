@@ -68,6 +68,7 @@ behavior. Unknown extension names fail config parsing.
 ## Commands
 
 ```text
+sid root                Discover the configured active task root
 sid new                 Allocate or graduate a task folder
 sid list                List task folders and reservations
 sid resolve             Resolve one canonical id
@@ -93,10 +94,17 @@ anchor and its direct relationship neighbors. A depth bound changes only which
 graph nodes and internal edges are returned; corpus-wide completeness and
 findings, plus the anchor's pending inbox, remain intact.
 
+`sid root` returns `{"root": "<absolute active task root>"}` using the same
+nearest-configuration discovery as allocation, without creating the root. Use
+`sid root --human` for a plain path.
+
 ### Identity lint
 
-`sid lint` audits folder identity and nothing else. It scans the direct
-children of every configured allocation root — the task scan roots plus the
+Since v0.4.0, `sid lint` audits folder identity and nothing else. This replaces
+the workflow-aware lint contract from v0.3.x; consumers must decode the new
+report and use their task-memory layer for document and workflow validation.
+
+It scans the direct children of every configured allocation root — the task scan roots plus the
 seed root, which all reserve one ref namespace — and reports four things:
 
 ```text
@@ -117,7 +125,9 @@ topic document, and it never follows an entry: a period-and-ref-shaped file or
 symlink is a valid reservation, because allocation must not reuse its ref. A
 configured root that does not exist yet is an empty namespace. Entrypoint
 frontmatter, relationship, inbox, and lifecycle-view health belong to the
-task-memory layer above Slopid, not to this command.
+task-memory layer above Slopid, not to this command. See
+[contract 0007](docs/contracts/0007-root-and-identity-lint.md) for the exact
+report, ordering, and failure rules.
 
 ### Move-projected relink
 
