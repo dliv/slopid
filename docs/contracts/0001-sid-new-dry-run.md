@@ -2,7 +2,7 @@
 
 Date: 2026-05-31
 Updated: 2026-10-26
-Status: Active for the unreleased identity-only candidate
+Status: Active for Sid 0.5.0
 
 ## Purpose
 
@@ -11,10 +11,10 @@ Status: Active for the unreleased identity-only candidate
 folder tree is canonical state. Slopid owns identity and allocation, while a
 consumer such as Slopdeck owns authored documents and lifecycle metadata.
 
-This contract records an unreleased breaking change from v0.4.0: config is now
+This contract records the v0.5.0 breaking change from v0.4.0: config is now
 flat, list and resolve navigate real directories, and no legacy config or wire
-aliases are accepted. Installation and release remain a later paired-adoption
-step.
+aliases are accepted. The release pairs with Slopdeck 0.1.1-alpha.19; workspace
+adoption requires caller and configuration migration.
 
 ## Project config
 

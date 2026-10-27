@@ -17,6 +17,6 @@ boundary. The current CLI contracts are in `docs/contracts/`.
 - [9. Identity-Only Lint](0009-identity-only-lint.md)
 
 ADRs 0007 and 0008 describe the retired document-reader and workflow-mutation
-surfaces. Their implementation and active instructions were removed in the
-unreleased identity-only candidate; the pinned v0.4.0 source commit preserves
-that history.
+surfaces. Their implementation and active instructions were removed for the
+v0.5.0 identity-only release; the pinned v0.4.0 source commit preserves that
+history.

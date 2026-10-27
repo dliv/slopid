@@ -2,7 +2,7 @@
 
 Date: 2026-10-22
 Updated: 2026-10-26
-Status: Active for the unreleased identity-only candidate
+Status: Active for Sid 0.5.0
 
 ## Root discovery
 
@@ -17,7 +17,7 @@ unknown keys and unsafe root paths. Help, version, `init`, and
 The accepted config fields are top-level optional `root` and optional
 `[ref].deny_prefixes`; `sid init` writes exactly `root = "stm"`. Table-based
 `[task]`, `[seed]`, `[note]`, `[topic]`, `[queue]`, and `[relink]` configs are
-not accepted by this candidate.
+not accepted by this release.
 
 ## Folder resolution
 
@@ -89,10 +89,10 @@ stdout with their own 0/1/2 status contract.
 
 ## Compatibility boundary and proof
 
-This is an unreleased breaking protocol change from v0.4.0. It intentionally
+This is the v0.5.0 breaking protocol change from v0.4.0. It intentionally
 does not decode legacy table config, accept a `tasks` list alias, or negotiate
-with old consumers. Slopdeck must be qualified as a paired consumer before
-adoption. The local CLI checks prove neither external-workspace compatibility,
+with old consumers. Slopdeck 0.1.1-alpha.19 is the matching paired consumer.
+Local CLI checks prove neither external-workspace compatibility,
 installed-binary safety, release embedding, nor browser behavior.
 
 `tests/identity_cli_test.rs` covers exact channels, exits, config and selector

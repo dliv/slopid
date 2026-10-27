@@ -2,7 +2,7 @@
 
 Date: 2026-05-31
 Updated: 2026-10-26
-Status: Working draft
+Status: Current source version 0.5.0; paired release preparation
 
 ## Current direction
 
@@ -11,10 +11,11 @@ stable folder names, lists real direct-child identity directories, resolves an
 exact folder/ref, and audits name-level reservations. A consumer such as
 Slopdeck owns task documents, relationships, capture data, and lifecycle state.
 
-The local identity-only source cut is an unreleased breaking candidate. It must
-be qualified with its paired Slopdeck consumer before any installation or
-release decision. The later adoption bucket still owns external-consumer
-evidence, version selection, distribution proof, and recoverable cutover.
+Sid 0.5.0 is the breaking identity-only release and pairs with Slopdeck
+0.1.1-alpha.19. Local source and package qualification establish the release
+inputs; remote distribution and recoverable workspace adoption remain separate
+proofs. Do not switch only one product or infer workflow parity from the
+identity protocol cut.
 
 ## Delivered identity behavior
 
@@ -32,12 +33,12 @@ evidence, version selection, distribution proof, and recoverable cutover.
 
 The earlier v0.3.x line grew into a document-reader and workflow CLI with
 graph/search/context/capture/note/seed/relink commands. That runtime surface and
-its contracts were removed from this candidate after the responsibility cut
-identified Slopdeck as the task-memory owner. They remain visible in the
-immutable v0.4.0 baseline commit, not as active implementation promises.
+its contracts were removed for the v0.5.0 responsibility cut after Slopdeck
+was identified as the task-memory owner. They remain visible in the immutable
+v0.4.0 baseline commit, not as active implementation promises.
 
-The package name remains `slop-id`; the local source version remains unchanged
-until a later version-selection decision. The hidden `--period` override stays
+The package name remains `slop-id`; the current source version is 0.5.0. The
+hidden `--period` override stays
 a shape-checked six-digit test seam. Calendar-valid month checks, global
 allocation locking, library extraction, and a separate refcode crate remain
 deferred unless later evidence changes their owner or scope.

@@ -2,7 +2,7 @@
 
 Date: 2026-06-12
 Updated: 2026-10-26
-Status: Active for the unreleased identity-only candidate
+Status: Active for Sid 0.5.0
 
 ## Commands
 
