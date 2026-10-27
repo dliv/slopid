@@ -34,9 +34,10 @@ they are needed.
 Success JSON fields are part of the command contract. New success-output fields
 require an intentional contract update.
 
-Human-readable errors and diagnostics remain on stderr. Successful stderr is not
-promised to be empty, but failure stdout should stay empty so agents do not
-consume partial success data.
+Failures use the JSON stderr envelope defined by contract 0007, and failure
+stdout stays empty so agents do not consume partial success data. This
+supersedes the original v1 statement that errors remain plain human-readable
+stderr text; the envelope's `message` remains human-readable.
 
 `sid agent-instructions` follows the same rule by returning a JSON envelope:
 

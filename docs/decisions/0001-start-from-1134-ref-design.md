@@ -33,9 +33,11 @@ The folder tree should sort by period and, within a month, usually by allocation
 order. A sortable folder-tree UI is a core goal, not cosmetic polish. Agents and
 humans should be able to cite and search short refs such as `sXXXX`.
 
-Once active, pending, and archive scan roots exist, they share one namespace.
-Moving a task between those roots must not casually free its ref for reuse in the
-same period.
+The active/pending/archive scan-root design was later removed by the unreleased
+identity-only cut. That candidate has one configured identity root. The
+single-root contract supersedes this paragraph for current behavior; if
+multi-root support returns, roots must share one namespace so moving a task
+between them does not casually free its ref for reuse in the same period.
 
 Do not redesign refs casually. Reopen the scheme only with evidence from real
 use or an owner decision.
