@@ -5,8 +5,8 @@ Status: Accepted
 Amended by: [ADR 0006](0006-opt-in-human-output-for-discovery.md), which allows
 opt-in non-contractual `--human` output on discovery commands.
 
-See also [ADR 0007](0007-tolerant-reader-results.md), which distinguishes a
-complete machine-readable lint result at exit 1 from an operational failure.
+Contract 0007 distinguishes a complete machine-readable lint result at exit 1
+from an operational failure and defines the current stderr error envelope.
 
 ## Context
 

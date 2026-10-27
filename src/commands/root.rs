@@ -6,13 +6,15 @@ use crate::commands::load_project_config;
 
 #[derive(Debug, Serialize)]
 pub struct RootResult {
+    pub base: PathBuf,
     pub root: PathBuf,
 }
 
 pub fn cmd_root(cwd: &Path) -> Result<RootResult> {
     let config = load_project_config(cwd)?;
     Ok(RootResult {
-        root: config.active_root,
+        base: config.base,
+        root: config.root,
     })
 }
 

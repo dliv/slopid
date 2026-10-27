@@ -1,7 +1,7 @@
 # 9. Identity-Only Lint
 
 Date: 2026-10-22
-Status: Accepted; supersedes the lint portion of ADR 0007
+Status: Accepted
 
 ## Context
 
@@ -19,14 +19,14 @@ operationally incomplete exit 2. The four identity finding codes and status
 rules are defined in contract 0007. Root discovery exposes the same active
 root that allocation uses without creating it.
 
-This accepted identity boundary ships as the pre-1 breaking v0.4.0 contract.
-There is no legacy workflow-lint mode. Other existing commands remain in this
-release; deciding whether to remove them is separate work.
+This identity lint boundary shipped in v0.4.0. The unreleased identity-only
+candidate removes the remaining document-reader and workflow commands; it has
+no legacy lint mode or config/list compatibility aliases. Slopdeck must be
+qualified as its paired consumer before any later adoption or release.
 
 ## Consequences
 
-Consumers of v0.3.x lint must update their report decoding and use their
-own task-memory validation layer. Consumers of the existing identity report
-can now obtain it from a tagged release. Adding another finding code requires
-coordinating closed-enum decoders. Document readers retain tolerant partial
-results and corpus-level findings; context depth affects selection only.
+Consumers of v0.3.x lint must update their report decoding and use their own
+task-memory validation layer. Adding another finding code requires coordinating
+closed-enum decoders. The identity-only candidate leaves document and workflow
+validation to consumers.

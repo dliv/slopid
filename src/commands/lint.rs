@@ -8,16 +8,22 @@
 //! reservation because allocation must not reuse its ref.
 
 use crate::commands::config::ProjectConfig;
-use crate::documents::Severity;
 use crate::refcode::is_recognized_ref;
 use crate::scan::split_task_folder_name;
-use anyhow::Result;
 use serde::Serialize;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    Error,
+    #[allow(dead_code)]
+    Warning,
+}
 
 /// The complete version-1 identity finding vocabulary. Slopdeck decodes this
 /// through a closed enum, so adding a spelling is a coordinated change.
@@ -76,11 +82,10 @@ impl SidIdentityFindingCode {
     }
 }
 
-pub fn cmd_lint(cwd: &Path) -> Result<LintExecution> {
-    let config = super::load_project_config(cwd)?;
-    let report = scan_identity(&config);
+pub fn cmd_lint(config: &ProjectConfig) -> LintExecution {
+    let report = scan_identity(config);
     let exit_code = exit_code(&report);
-    Ok(LintExecution { report, exit_code })
+    LintExecution { report, exit_code }
 }
 
 /// Incomplete coverage outranks an unhealthy verdict: an agent that cannot see
@@ -100,9 +105,9 @@ fn scan_identity(config: &ProjectConfig) -> SidLintReport {
     let mut findings = Vec::new();
     let mut reservations: BTreeMap<String, BTreeSet<PathBuf>> = BTreeMap::new();
 
-    for root in config.allocation_roots() {
-        let relative_root = relative_to_base(&config.base, &root);
-        let entries = match fs::read_dir(&root) {
+    for root in [&config.root] {
+        let relative_root = relative_to_base(&config.base, root);
+        let entries = match fs::read_dir(root) {
             Ok(entries) => entries,
             // A configured root that does not exist yet reserves nothing.
             // Allocation creates it on demand, so absence is an empty

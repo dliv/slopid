@@ -1,28 +1,17 @@
 use anyhow::{Context, Result, bail};
-use chrono::Local;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use crate::commands::{ProjectConfig, load_project_config};
-use crate::documents::{self, CanonicalSourceKind};
+use crate::commands::ProjectConfig;
 use crate::refcode::{self, RefTail};
 use crate::scan::{self, is_valid_period};
 use crate::slug::slugify;
 
 const CANDIDATE_BUDGET: usize = 100;
 const TAIL_SPACE_SIZE: usize = refcode::SLOP30_CHARS.len() * refcode::SLOP30_CHARS.len();
-
-#[derive(Debug)]
-pub struct NewInputs {
-    pub title: Option<String>,
-    pub from_seed: Option<String>,
-    pub dry_run: bool,
-    pub period: Option<String>,
-    pub into: Option<String>,
-}
 
 #[derive(Debug)]
 pub struct ScanSnapshot {
@@ -99,43 +88,20 @@ pub struct NewResult {
     pub dry_run: bool,
 }
 
-pub fn cmd_new(inputs: NewInputs, cwd: &Path) -> Result<NewResult> {
-    match (inputs.title, inputs.from_seed) {
-        (Some(title), None) => {
-            cmd_new_title(title, inputs.dry_run, inputs.period, inputs.into, cwd)
-        }
-        (None, Some(seed_id)) => {
-            if inputs.period.is_some() {
-                bail!("--period cannot be used with --from-seed");
-            }
-            graduate_seed(&seed_id, inputs.dry_run, inputs.into.as_deref(), cwd)
-        }
-        _ => bail!("new requires exactly one title or --from-seed ID"),
-    }
-}
-
-fn cmd_new_title(
+pub fn cmd_new(
     title: String,
     dry_run: bool,
     period: Option<String>,
-    into: Option<String>,
-    cwd: &Path,
+    config: &ProjectConfig,
 ) -> Result<NewResult> {
-    let config = load_project_config(cwd)?;
-    let root = match &into {
-        None => config.active_root.clone(),
-        Some(into) => resolve_destination_root(into, &config)?,
-    };
     let period = period.unwrap_or_else(current_period);
-    let snapshot = scan_roots(&config.allocation_roots())?;
-    let tails = randomized_tail_space();
-    let plan = plan_new(
+    let snapshot = scan_root(&config.root)?;
+    let plan = plan_random_new(
         title,
-        root,
+        config.root.clone(),
         period,
         &snapshot,
         &config.ref_prefix_policy,
-        tails,
     )?;
 
     if dry_run {
@@ -144,164 +110,11 @@ fn cmd_new_title(
 
     execute_new(&plan)
 }
-
-fn graduate_seed(
-    seed_id: &str,
-    dry_run: bool,
-    into: Option<&str>,
-    cwd: &Path,
-) -> Result<NewResult> {
-    let config = load_project_config(cwd)?;
-    let index = documents::scan_sources(&config.document_sources());
-    let Some(record) = index.nodes.get(seed_id) else {
-        bail!("no unique valid seed has canonical id {seed_id}");
-    };
-    if record.source_kind != CanonicalSourceKind::Seed {
-        bail!("canonical id {seed_id} is not a seed");
-    }
-    let stem = record
-        .node
-        .path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| anyhow::anyhow!("seed filename is not valid UTF-8"))?;
-    let mut parts = stem.splitn(3, '_');
-    let period = parts.next().unwrap_or_default();
-    let filename_ref = parts.next().unwrap_or_default();
-    let slug = parts.next().unwrap_or_default();
-    if filename_ref != seed_id || slug.is_empty() || !is_valid_period(period) {
-        bail!("seed filename does not preserve period/ref/slug identity");
-    }
-    let root = match into {
-        None => config.active_root.clone(),
-        Some(into) => resolve_destination_root(into, &config)?,
-    };
-    let destination = root.join(stem);
-    if destination.exists() || destination.join("napkin.md").exists() {
-        bail!(
-            "seed graduation destination already exists: {}",
-            destination.display()
-        );
-    }
-    let result = NewResult {
-        title: record.node.frontmatter["title"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string(),
-        slug: slug.to_string(),
-        period: period.to_string(),
-        sid_ref: seed_id.to_string(),
-        id: stem.to_string(),
-        path: destination.clone(),
-        dry_run,
-    };
-    if dry_run {
-        return Ok(result);
-    }
-    fs::create_dir_all(&root).with_context(|| format!("create task root {}", root.display()))?;
-    execute_graduation(&record.node.path, &destination, |from, to| {
-        fs::rename(from, to)
-    })?;
-    Ok(result)
-}
-
-fn execute_graduation<F>(source: &Path, destination: &Path, rename: F) -> Result<()>
-where
-    F: FnOnce(&Path, &Path) -> std::io::Result<()>,
-{
-    let napkin = destination.join("napkin.md");
-    fs::create_dir(destination).with_context(|| {
-        format!(
-            "create seed graduation destination {}",
-            destination.display()
-        )
-    })?;
-    if let Err(err) = rename(source, &napkin) {
-        let cleanup_note = match fs::remove_dir(destination) {
-            Ok(()) => String::new(),
-            Err(cleanup_err) => {
-                format!("; newly created destination was not removed: {cleanup_err}")
-            }
-        };
-        bail!(
-            "move seed {} to {}: {err}{cleanup_note}",
-            source.display(),
-            napkin.display()
-        );
-    }
-    Ok(())
-}
-
 pub(crate) fn current_period() -> String {
-    Local::now().format("%Y%m").to_string()
+    chrono::Local::now().format("%Y%m").to_string()
 }
 
-/// Resolve `--into` against the configured roots (active root included) by
-/// component-wise suffix match, so `.slow`, `./.slow`, `stm/.slow`, and the
-/// canonicalized absolute path all name the same root. Anything that does
-/// not match exactly one configured root fails closed.
-pub(crate) fn resolve_destination_root(into: &str, config: &ProjectConfig) -> Result<PathBuf> {
-    let needle = Path::new(into);
-    // A leading `./` (shell tab completion) is noise; `Path::ends_with`
-    // already normalizes interior `.` components but preserves a leading one.
-    let needle = needle.strip_prefix(".").unwrap_or(needle);
-    let matches: Vec<&PathBuf> = if needle.as_os_str().is_empty() {
-        // `Path::ends_with("")` is true for every path; an empty needle
-        // ("", ".", "./") must fail closed instead of matching all roots.
-        Vec::new()
-    } else {
-        config
-            .scan_roots
-            .iter()
-            .filter(|root| root.ends_with(needle))
-            .collect()
-    };
-
-    match matches.as_slice() {
-        [root] => Ok((*root).clone()),
-        [] => bail!(
-            "--into is not a configured task root: \"{into}\" (configured roots: {})",
-            display_roots(config)
-        ),
-        _ => bail!(
-            "--into is ambiguous: \"{into}\" matches {}",
-            matches
-                .iter()
-                .map(|root| display_root(root, config))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-    }
-}
-
-fn display_root(root: &Path, config: &ProjectConfig) -> String {
-    root.strip_prefix(&config.base)
-        .unwrap_or(root)
-        .display()
-        .to_string()
-}
-
-fn display_roots(config: &ProjectConfig) -> String {
-    config
-        .scan_roots
-        .iter()
-        .map(|root| display_root(root, config))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-pub fn scan_roots(roots: &[PathBuf]) -> Result<ScanSnapshot> {
-    let mut snapshot = ScanSnapshot::empty();
-
-    for root in roots {
-        scan_root_into(&mut snapshot, root)?;
-    }
-
-    Ok(snapshot)
-}
-
-#[cfg(test)]
-fn scan_root(root: &Path) -> Result<ScanSnapshot> {
+pub fn scan_root(root: &Path) -> Result<ScanSnapshot> {
     let mut snapshot = ScanSnapshot::empty();
     scan_root_into(&mut snapshot, root)?;
     Ok(snapshot)
@@ -475,21 +288,6 @@ mod tests {
             occupied,
             max_seq: HashMap::new(),
         }
-    }
-
-    #[test]
-    fn graduation_rename_failure_rolls_back_only_the_new_empty_directory() {
-        let tmp = tempfile::tempdir().unwrap();
-        let source = tmp.path().join("seed.md");
-        let destination = tmp.path().join("task");
-        fs::write(&source, "seed bytes").unwrap();
-        let error = execute_graduation(&source, &destination, |_, _| {
-            Err(std::io::Error::other("injected rename failure"))
-        })
-        .unwrap_err();
-        assert!(error.to_string().contains("injected rename failure"));
-        assert!(source.exists());
-        assert!(!destination.exists());
     }
 
     #[test]

@@ -2,160 +2,119 @@
 
 mod cli;
 mod commands;
-mod documents;
-mod input;
-mod markdown;
+mod failure;
 pub mod refcode;
 pub mod scan;
 pub mod slug;
-mod walk;
 
-use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, error::ErrorKind};
 use cli::{Cli, Command};
-use serde::Serialize;
+use commands::ResolveError;
+use failure::{AmbiguousCandidate, Failure, report_failure, write_json, write_text};
 
 pub fn main_entry() {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            ) =>
+        {
+            if let Err(failure) = write_text(&error.to_string()) {
+                report_failure(failure);
+            }
+            return;
+        }
+        Err(error) => report_failure(Failure::Usage(error.to_string())),
+    };
 
     match run(cli) {
         Ok(0) => {}
         Ok(code) => std::process::exit(code),
-        Err(err) => {
-            eprintln!("error: {:#}", err);
-            std::process::exit(1);
-        }
+        Err(failure) => report_failure(failure),
     }
 }
 
-fn run(cli: Cli) -> Result<i32> {
+fn run(cli: Cli) -> Result<i32, Failure> {
     match cli.command {
+        Command::Init => {
+            let cwd = current_dir()?;
+            let result = commands::init_config(&cwd).map_err(Failure::Init)?;
+            write_json(&result)?;
+        }
         Command::Root { human } => {
-            let cwd = std::env::current_dir()?;
-            let result = commands::cmd_root(&cwd)?;
+            let cwd = current_dir()?;
+            let result = commands::cmd_root(&cwd).map_err(Failure::Config)?;
             if human {
-                print!("{}", commands::render_root_human(&result));
+                write_text(&commands::render_root_human(&result))?;
             } else {
-                output(&result)?;
+                write_json(&result)?;
             }
         }
         Command::New {
             title,
-            from_seed,
             dry_run,
             period,
-            into,
         } => {
-            let cwd = std::env::current_dir()?;
-            let inputs = commands::NewInputs {
-                title,
-                from_seed,
-                dry_run,
-                period,
-                into,
-            };
-            let result = commands::cmd_new(inputs, &cwd)?;
-            output(&result)?;
+            let cwd = current_dir()?;
+            let config = commands::load_project_config(&cwd).map_err(Failure::Config)?;
+            let result =
+                commands::cmd_new(title, dry_run, period, &config).map_err(Failure::New)?;
+            write_json(&result)?;
         }
         Command::List { terms, sort, human } => {
-            let cwd = std::env::current_dir()?;
-            let result = commands::cmd_list(terms, sort, &cwd)?;
+            let cwd = current_dir()?;
+            let config = commands::load_project_config(&cwd).map_err(Failure::Config)?;
+            let result = commands::cmd_list(terms, sort, &config).map_err(Failure::List)?;
             if human {
-                print!("{}", commands::render_human(&result));
+                write_text(&commands::render_human(&result))?;
             } else {
-                output(&result)?;
+                write_json(&result)?;
             }
         }
-        Command::Resolve { id } => {
-            let cwd = std::env::current_dir()?;
-            output(&commands::cmd_resolve(&id, &cwd)?)?;
-        }
-        Command::Graph {
-            id,
-            depth,
-            direction,
-            edges,
-        } => {
-            let cwd = std::env::current_dir()?;
-            output(&commands::cmd_graph(&id, depth, direction, &edges, &cwd)?)?;
+        Command::Resolve { selector } => {
+            let cwd = current_dir()?;
+            let config = commands::load_project_config(&cwd).map_err(Failure::Config)?;
+            let result = commands::cmd_resolve(&selector, &config.root).map_err(resolve_failure)?;
+            write_json(&result)?;
         }
         Command::Lint => {
-            let cwd = std::env::current_dir()?;
-            // The report is always the answer, including the partial one: an
-            // agent needs the findings it could observe alongside the status.
-            let execution = commands::cmd_lint(&cwd)?;
-            output(&execution.report)?;
+            let cwd = current_dir()?;
+            let config = commands::load_project_config(&cwd).map_err(Failure::Config)?;
+            let execution = commands::cmd_lint(&config);
+            write_json(&execution.report)?;
             return Ok(execution.exit_code);
         }
-        Command::Search { terms, limit } => {
-            let cwd = std::env::current_dir()?;
-            output(&commands::cmd_search(terms, limit, &cwd)?)?;
-        }
-        Command::Context { id, depth } => {
-            let cwd = std::env::current_dir()?;
-            output(&commands::cmd_context(&id, depth, &cwd)?)?;
-        }
-        Command::Captures => {
-            let cwd = std::env::current_dir()?;
-            output(&commands::cmd_captures(&cwd)?)?;
-        }
-        Command::Note { text } => {
-            let cwd = std::env::current_dir()?;
-            let input = input::collect_note(text)?;
-            output(&commands::cmd_note(input, &cwd)?)?;
-        }
-        Command::Seed {
-            title,
-            origins,
-            edit,
-            dry_run,
-        } => {
-            let cwd = std::env::current_dir()?;
-            let body = if dry_run {
-                String::new()
-            } else {
-                input::collect_seed_body(edit)?
-            };
-            output(&commands::cmd_seed(
-                commands::SeedInputs {
-                    title,
-                    origins,
-                    dry_run,
-                    body,
-                },
-                &cwd,
-            )?)?;
-        }
-        Command::Relink {
-            write,
-            move_id,
-            into,
-            expected_plan_sha256,
-        } => {
-            let cwd = std::env::current_dir()?;
-            let inputs = commands::RelinkInputs {
-                write,
-                move_id,
-                into,
-                expected_plan_sha256,
-            };
-            output(&commands::cmd_relink(inputs, &cwd)?)?;
-        }
         Command::AgentInstructions => {
-            let result = commands::agent_instructions();
-            output(&result)?;
-        }
-        Command::Init => {
-            let cwd = std::env::current_dir()?;
-            let result = commands::init_config(&cwd)?;
-            output(&result)?;
+            write_json(&commands::agent_instructions())?;
         }
     }
 
     Ok(0)
 }
 
-fn output<T: Serialize>(result: &T) -> Result<()> {
-    println!("{}", serde_json::to_string_pretty(result)?);
-    Ok(())
+fn current_dir() -> Result<std::path::PathBuf, Failure> {
+    std::env::current_dir().map_err(|error| Failure::Runtime(error.into()))
+}
+
+fn resolve_failure(error: ResolveError) -> Failure {
+    match error {
+        ResolveError::Invalid(message) => Failure::ResolveInvalid(message),
+        ResolveError::NotFound(message) => Failure::ResolveNotFound(message),
+        ResolveError::Ambiguous {
+            message,
+            candidates,
+        } => Failure::ResolveAmbiguous {
+            message,
+            candidates: candidates
+                .into_iter()
+                .map(|candidate| AmbiguousCandidate {
+                    id: candidate.id,
+                    path: candidate.path,
+                })
+                .collect(),
+        },
+        ResolveError::Unavailable(error) => Failure::ResolveUnavailable(error),
+    }
 }

@@ -7,6 +7,11 @@ design that appears to best match the owner's preferences after several rounds
 of review. Treat this as the recommended default unless the owner explicitly
 reopens the ref design.
 
+> Current scope note (2026-10-26): this document remains the reference for ref
+> alphabets, sequence encoding, generated-ref rules, and allocation limits.
+> Older command, multi-root config, and reader sections are historical context;
+> the active CLI and filesystem contracts are in `docs/contracts/`.
+
 It is not sacred scripture. It is the map of the territory already explored, so
 the next agent does not painfully rediscover the same failure modes.
 

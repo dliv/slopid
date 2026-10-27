@@ -1,76 +1,72 @@
-# Contract 0003 - `sid list` discovery slice
+# Contract 0003 — identity folder discovery
 
 Date: 2026-06-12
-Status: Active
+Updated: 2026-10-26
+Status: Active for the unreleased identity-only candidate
 
-## Purpose
-
-Make existing ids easy for humans and agents to find (roadmap milestone 3).
+## Commands
 
 ```text
-sid list
-sid list <term>...
+sid list [TERM]...
 sid list --sort id
+sid resolve <REF-OR-FOLDER-NAME>
 ```
 
-## Semantics
+The nearest upward `.sid` supplies one logical root; with no config, the root is
+`stm` under cwd. The root need not exist. A missing root is an empty snapshot;
+a root, iterator, or matching-entry metadata error fails closed before a result
+is printed.
 
-- `sid list` reports the same namespace view allocation uses: every direct
-  child with a recognized five-character ref across the active root and the
-  configured scan roots, using the same `.sid` discovery as `sid new`
-  (upward walk, nearest config, paths resolved at the project base).
-- Name-based only. File types are never inspected, so non-directory
-  reservations (zipped task-folder exports) are listed alongside folders.
-- Slugless entries report an empty `slug`.
-- Period-prefixed names with non-recognized ref segments are not listed
-  (mirrors the scan policy in contract 0001).
-- Positional arguments are search terms (owner request 2026-06-12). Each
-  term matches an entry when the `sid_ref` starts with it or the slug
-  contains it, case-insensitively; multiple terms AND together. A bare ref
-  prefix therefore behaves as before. No matches is success with an empty
-  list, not an error.
-- Default sort is most recently touched first (owner request 2026-06-12).
-  An entry's touch time is the later of its own mtime and its direct
-  children's mtimes, so editing a file inside a task folder surfaces the
-  folder; deeper edits do not count (no recursion, by design). Metadata
-  errors degrade the touch time toward the epoch — they never fail the
-  listing. Ties break ascending by `id`, then `path`.
-- `--sort id` gives the stable order: ascending by `id`, then by `path` for
-  identical ids in different roots. Within a period this is allocation
-  order.
-- A missing root contributes nothing; an unreadable root fails closed with
-  the shared "scan task root" diagnostic (same policy as `sid new`).
+## Folder snapshot
 
-## Output Contract
+List and resolve share a complete direct-child snapshot. They parse identity
+names and classify matching entries with metadata that does not follow the
+final symlink. Only real directories appear. Matching files, directory
+symlinks, broken symlinks, and other object types remain allocation/lint
+reservations but are not navigable. Nested matching directories are never
+visited. This snapshot does not lease the filesystem against later replacement.
 
-- Success stdout is JSON (ADR 0004) with exactly one key, `tasks`: an array
-  of entries each having exactly `id`, `period`, `sid_ref`, `slug`,
-  `modified`, `root`, and `path` (`root` is the absolute path of the
-  containing root; `path` is the absolute entry path; `modified` is the
-  touch time as RFC 3339 local time with seconds precision).
-- Failure stdout is empty; diagnostics are human-readable stderr, exit 1.
-- `--human` (ADR 0006) replaces the JSON success output with one
-  column-aligned plain line per task — local touch time (minutes), id,
-  project-relative root — newest first by default; no matches prints
-  nothing. The plain formatting is explicitly not a machine interface and
-  may change without a contract update; agents must parse the default JSON,
-  which is unaffected by the flag's existence.
+Each list row contains exactly `id`, `period`, `sid_ref`, `slug`, `modified`,
+`root`, and `path`. `id` is the complete folder name; `sid_ref` is the short
+recognized ref. Slugless legacy folders report an empty slug. Paths are
+absolute joins beneath the discovered logical root.
 
-## Test Matrix
+`modified` is an RFC 3339 local timestamp with seconds precision, derived from
+the folder and its direct children only. Deeper writes do not affect recency;
+child symlink targets are not followed. Recency-only errors degrade to the
+oldest timestamp without failing the otherwise complete snapshot.
 
-| Constraint | Status |
-| --- | --- |
-| Empty project lists `{"tasks": []}` | tested |
-| Entries across active and all scan roots; `--sort id` order | tested |
-| Default recency order, including direct-child touch propagation | tested |
-| Non-directory reservations sort by their own mtime | tested |
-| Exact per-entry and top-level JSON keys | tested |
-| Slugless entries report empty slug | tested |
-| Non-directory reservations (zip exports) are listed | tested |
-| Non-recognized ref segments excluded | tested |
-| Ref-prefix terms, including no-match success | tested |
-| Slug-word terms: AND semantics, case-insensitive, partial words | tested |
-| Unreadable scan root fails closed | tested |
-| Upward `.sid` discovery applies to list | tested |
-| `--human` plain lines; default output stays exact JSON | tested |
-| `--human` with no matches prints nothing, exit 0 | tested |
+Search terms are ANDed. Each term must match the ref prefix or a slug substring,
+case-insensitively. The default order is recency descending, then `id` and path
+ascending. `--sort id` orders by `id`, then path. `--human` replaces only
+successful JSON output with non-contractual plain columns.
+
+## Resolve
+
+Resolve accepts an exact case-sensitive recognized short ref or exact complete
+identity folder name. Paths, prefixes, case-folded refs, and path separators
+are invalid. Selectors are matched against enumerated folder names, never
+joined with the root as user-supplied paths. A unique match returns
+`{"folder": ...}` with exactly `id`, `period`, `sid_ref`, `slug`, `root`, and
+`path`; there is no recency field and no document content is opened.
+
+No matches is `sid-resolve-not-found`. Multiple real directories for a short
+ref is `sid-resolve-ambiguous`, with candidates sorted by full `id` then path.
+The complete folder name still resolves one directory in an ambiguous ref
+namespace. Files and symlinks sharing the ref do not add ambiguity, though
+lint continues to report their duplicate reservation.
+
+## Output and test matrix
+
+List success is JSON with exactly one key, `folders`, containing rows with the
+exact fields above. Pre-result failures use contract 0007's structured stderr
+envelopes and empty stdout. List snapshot failures use `sid-list`; resolve
+snapshot failures use `sid-resolve-unavailable`; selector failures retain
+distinct invalid, not-found, and ambiguous codes.
+
+Tests cover slugged and slugless real directories; files, directory symlinks,
+broken symlinks, nested directories, invalid refs, missing roots, and roots
+that are files; deterministic iterator and matching-metadata failures; direct
+child versus deep and symlink-target recency; AND filters, sorting, exact row
+keys, human output, same-ref ambiguity, full-name recovery, file reservations,
+invalid selectors, and no-read FIFO entrypoints.

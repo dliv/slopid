@@ -1,13 +1,14 @@
 # slopid
 
-Deterministic local task memory for humans and agents.
+`slopid` provides `sid`, a local CLI for allocating and identifying task
+folders. Slopid owns folder identity; a task-memory consumer such as Slopdeck
+owns documents, relationships, notes, seeds, and lifecycle state.
 
-The repository is named `slopid`; the command is `sid`. It allocates durable
-task folders with short references, reads their relationships and captures,
-and performs a small set of controlled mutations. Machine-readable JSON is the
-default interface.
-
-The code and documentation in this repository were at least 99% LLM generated.
+> **Unreleased protocol cut:** this source branch contains a breaking,
+> identity-only candidate. Published v0.4.0 binaries still use the earlier
+> table-based `.sid` config and `tasks` list key. Qualify and adopt Sid together
+> with its matching Slopdeck consumer; this candidate does not change installed
+> binaries or workspace config.
 
 ## Install
 
@@ -17,203 +18,95 @@ brew install sid
 ```
 
 Or download a binary from [GitHub Releases](https://github.com/dliv/slopid/releases).
+These published installation paths currently provide the released v0.4.0
+protocol until a later coordinated release.
 
 ## Quick Start
 
-Initialize a project-local `.sid` configuration:
+Initialize a project-local `.sid`, then allocate and inspect folders:
 
 ```sh
 sid init
-```
-
-Then allocate and inspect task memory:
-
-```sh
 sid new "investigate flaky deployment"
 sid list --human
+sid resolve sa2a7
 sid lint
-sid search deployment
 ```
 
 `sid` discovers the nearest `.sid` file by walking upward from the current
-directory. Without one, it uses `stm/` beneath the current directory. Paths in
-`.sid` are project-relative.
+directory. Without one, the current directory is the project base and `stm` is
+the identity root. The root is not created until `sid new` needs it.
 
-Generated refs default to the built-in `prude` prefix policy. A project can
-replace it exactly—including disabling it with an empty array:
+The supported config shape is one relative root and an optional replacement for
+the generated-ref deny-prefix policy:
 
 ```toml
+root = "stm"
+
 [ref]
 deny_prefixes = []
 ```
 
-Markdown destinations are literal by default, including filenames that end in
-text such as `:33`. Projects that intentionally author terminal editor-style
-line locators can opt into relink compatibility:
-
-```toml
-[relink]
-destination_extensions = ["colon-line"]
-```
-
-With `colon-line`, `sid relink` recognizes only a terminal positive decimal
-locator such as `:33` whose base does not end in `/`. A separator-ended spelling
-such as `assets/:33` remains an ordinary literal path. For a recognized locator,
-Slopid still gives an existing literal colon-suffixed file precedence; otherwise
-it resolves and checks the base file while preserving the locator and any
-following `#fragment`. It does not validate line counts.
-Omitting `[relink]` or using an empty list preserves the default literal-path
-behavior. Unknown extension names fail config parsing.
+Omitting `root` uses `stm`. Root paths reject absolute paths, `..`, empty
+strings, and `.`. Generated refs use the built-in policy unless
+`[ref].deny_prefixes` is present; a present array replaces the preset exactly,
+and an empty array disables prefix filtering.
 
 ## Commands
 
 ```text
-sid root                Discover the configured active task root
-sid new                 Allocate or graduate a task folder
-sid list                List task folders and reservations
-sid resolve             Resolve one canonical id
-sid graph               Read a relationship component
-sid lint                Audit direct-child folder identity
-sid search              Search authored text and captures
-sid context             Read one task graph and pending inbox
-sid captures            Inventory pending notes and seeds
-sid note                Capture an identity-free note
-sid seed                Create or preview a parked seed
-sid relink              Preview or apply safe Markdown link repairs
-sid agent-instructions  Print agent usage guidance
-sid init                Write the default .sid configuration
+sid init                    Write the default .sid file
+sid root                    Print the absolute project base and root
+sid new "task title"        Allocate one folder identity
+sid new --dry-run "title"   Preview allocation without writing
+sid list                    List real direct-child identity folders
+sid resolve sa2a7           Resolve one exact short ref
+sid resolve 202610_sa2a7_fix-login  Resolve one exact folder name
+sid lint                    Audit names and ref reservations
+sid agent-instructions      Print machine-readable usage guidance
 ```
 
-Read/query commands emit JSON by default. `sid list --human` is an explicitly
-non-contractual display mode for direct use. Mutations expose dry-run or preview
-paths where applicable; `sid relink` does not write unless passed `--write`.
+Successful commands emit JSON by default. `root --human` prints only the root;
+`list --human` prints plain columns. List terms are case-insensitive AND
+filters: each must match the ref prefix or a slug substring. The default list
+sort is most recently touched first; `--sort id` orders by full folder name.
 
-`sid context <ID>` preserves the complete connected-component graph by default.
-Use `sid context <ID> --depth 0` for the anchor alone or `--depth 1` for the
-anchor and its direct relationship neighbors. A depth bound changes only which
-graph nodes and internal edges are returned; corpus-wide completeness and
-findings, plus the anchor's pending inbox, remain intact.
+List returns `{"folders": [...]}`. Each row contains exactly `id`, `period`,
+`sid_ref`, `slug`, `modified`, `root`, and `path`. Only direct real directories
+appear. Slugless identities are supported. A file, directory symlink, broken
+symlink, or other matching child remains an allocation/lint reservation but is
+not a navigable folder. Folder-list and resolve results are snapshots, not
+leases against concurrent filesystem changes.
 
-`sid root` returns `{"root": "<absolute active task root>"}` using the same
-nearest-configuration discovery as allocation, without creating the root. Use
-`sid root --human` for a plain path.
+Resolve accepts an exact recognized short ref or complete identity folder
+name. It reads only direct-child names and metadata; it does not open
+`CURRENT_STATE.md` or other authored content. A short ref with multiple real
+directories returns sorted candidates; the full folder name remains an exact
+recovery selector.
 
-### Identity lint
+`sid lint` scans direct-child names only. It reports invalid refs under a
+six-digit period, duplicate recognized refs, and incomplete directory scans.
+It never opens Markdown. The report contains `complete`, `healthy`, and
+`findings`, with locators relative to the project base. Exit 0 is complete and
+healthy, exit 1 is complete with findings, and exit 2 is incomplete.
 
-Since v0.4.0, `sid lint` audits folder identity and nothing else. This replaces
-the workflow-aware lint contract from v0.3.x; consumers must decode the new
-report and use their task-memory layer for document and workflow validation.
-
-It scans the direct children of every configured allocation root — the task scan roots plus the
-seed root, which all reserve one ref namespace — and reports four things:
-
-```text
-identity-folder-ref-invalid   valid six-digit period, unrecognized ref
-identity-ref-duplicate        one ref reserved by more than one direct child
-identity-root-unreadable      a configured root could not be enumerated
-identity-entry-unreadable     a directory entry could not be read
-```
-
-The report is `{"complete": bool, "healthy": bool, "findings": [...]}`, with
-locators relative to the project base. `complete` describes coverage and
-`healthy` describes validity, so the process exits `0` for a complete healthy
-report, `1` for a complete report containing errors, and `2` for an incomplete
-one. Warnings alone stay successful.
-
-Lint never opens `CURRENT_STATE.md`, an inbox message, a capture note, or a
-topic document, and it never follows an entry: a period-and-ref-shaped file or
-symlink is a valid reservation, because allocation must not reuse its ref. A
-configured root that does not exist yet is an empty namespace. Entrypoint
-frontmatter, relationship, inbox, and lifecycle-view health belong to the
-task-memory layer above Slopid, not to this command. See
-[contract 0007](docs/contracts/0007-root-and-identity-lint.md) for the exact
-report, ordering, and failure rules.
-
-### Move-projected relink
-
-`sid relink` repairs every destination it can prove. To instead repair only what
-one planned lifecycle move would change, scope it to a stable id and a configured
-destination root:
-
-```bash
-sid relink --move sa2a7 --into .archive
-sid relink --move sa2a7 --into .archive \
-  --write --expected-plan-sha256 <plan_sha256-from-the-preview>
-```
-
-The preview reports the projected `from_owner`/`to_owner`, the scoped changes, and
-a `plan_sha256` bound to the move's effect set: inbound links to the moving owner
-plus links authored inside it whose source directory moves. Writing requires that
-exact digest from a *fresh* preview and refuses before touching any file if the
-plan changed or is incomplete. A partial write is forward-recoverable rather than
-rolled back, so take another preview and apply the remainder. If the owner already
-sits under the destination root, the same command verifies its scoped links
-instead of planning a move.
-
-`complete:true` means every move-caused repair in Slopid's declared authored
-source coverage was classified and this scoped plan is safe to apply. It is not
-a certificate that every local destination resolves. A generic destination
-proven absent under both its current and projected readings yields
-`relink-unresolved-local-destination` with `severity:warning`. The warning and
-the source's complete bytes bind `plan_sha256`, but no replacement is proposed
-and completeness stays true; an exact-digest warning-only `--write` is valid
-zero-change convergence. Ref-less and multi-ref projected changes still report
-`id:null` rather than inventing target identity. Excluded task `inbox`, notes,
-`tmp`, VCS metadata, and ignored paths remain outside the proof boundary. See
-[contract 0006](docs/contracts/0006-move-projected-relink.md) for the exact
-effect set, digest authority, and refusal rules.
-
-Every in-scope destination is matched to one raw byte range independently proven
-to decode to the destination the parser reported, and every replacement is
-proven to reparse to the intended destination before it becomes write authority.
-A destination whose span or representation cannot be proven yields
-`unreadable-entry` and makes the result incomplete instead of being guessed or
-quietly dropped. Settled verification judges recognized-ref and generic
-destinations by preserved, unambiguous resolution to their intended targets;
-ordinary global relink still owns canonical spelling. Recognized missing-target
-and ambiguity failures remain errors, while generic proven absence remains a
-warning. Unknown inspection state, unsafe representation, and actual move-caused
-drift also remain errors. Only `NotFound` proves absence; any other inspection
-error refuses. Slopid reports observed link and filesystem state and does not
-model cleanup-resource lifecycle.
-
-### Authored-writer quiescence
-
-Keep authored Markdown writers quiescent from an approved projected `--write`
-through the owner rename you perform afterwards. This is the caller's duty:
-Slopid does not detect or lease writers, and has no lock, session registry, or
-compare-and-swap.
-
-The per-file byte check is an early-race check only. It skips a file whose bytes
-already changed before the comparison, but an edit landing after that check and
-before the atomic replacement is overwritten. Atomic replacement prevents a torn
-file, not a lost concurrent edit. That narrow window is an accepted limitation of
-this version; if an unexpected writer may have run, take a fresh preview rather
-than trusting the previous comparison.
-
-Slopid only repairs Markdown destinations. It does not move folders, file tasks,
-or run any other part of a lifecycle operation.
+Pre-result errors emit one JSON `error` object on stderr with empty stdout.
+Typed codes distinguish config, allocation, list, resolve, init, runtime,
+output, and CLI usage failures. CLI usage errors exit 2; other command failures
+exit 1. Lint's complete or incomplete reports remain on stdout at their
+documented exit status.
 
 ## AI Agent Integration
 
-Run `sid agent-instructions` for the full machine-readable usage guide.
-
-For a project's `AGENTS.md` or `CLAUDE.md`, a minimal integration is:
-
-```markdown
-## sid
-
-This project uses `sid` for deterministic local task memory. Run
-`sid agent-instructions` before creating, querying, or modifying task memory.
-Parse JSON output and inspect completeness and findings before treating partial
-query results as authoritative.
-```
+Run `sid agent-instructions` for the machine-readable usage guide. Parse JSON
+results and keep Slopid's folder identity separate from task-memory metadata.
+Do not invent refs by hand for durable task folders.
 
 ## Development
 
 ```sh
-cargo build
-cargo test
+cargo build --locked
+cargo test --locked
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
 ```

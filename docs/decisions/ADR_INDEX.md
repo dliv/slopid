@@ -1,11 +1,10 @@
 # ADR Index
 
-Date: 2026-05-31
+Date: 2026-10-26
 Status: Active
 
-Durable decisions for `slop-id` live here. Contracts in `docs/contracts/` define
-implementation slices; ADRs capture project decisions that should survive beyond
-one slice.
+These decisions apply to Slopid's local folder-identity and allocation
+boundary. The current CLI contracts are in `docs/contracts/`.
 
 ## Accepted
 
@@ -15,13 +14,9 @@ one slice.
 - [4. JSON Success Output By Default](0004-json-success-output.md)
   (amended by ADR 0006)
 - [6. Opt-In Human Output For Discovery Commands](0006-opt-in-human-output-for-discovery.md)
-- [7. Tolerant Reader Results](0007-tolerant-reader-results.md)
-  (lint portion superseded by ADR 0009)
-- [8. Deterministic Protocol And Controlled Mutations](0008-deterministic-protocol-and-controlled-mutations.md)
 - [9. Identity-Only Lint](0009-identity-only-lint.md)
 
-## Notes
-
-- These ADRs intentionally do not import all workforest decisions.
-- Reopen an ADR with a new superseding record rather than editing history after
-  implementation depends on it.
+ADRs 0007 and 0008 describe the retired document-reader and workflow-mutation
+surfaces. Their implementation and active instructions were removed in the
+unreleased identity-only candidate; the pinned v0.4.0 source commit preserves
+that history.

@@ -6,20 +6,19 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::commands::load_project_config;
-use crate::refcode;
-use crate::scan;
+use crate::commands::ProjectConfig;
+use crate::commands::folders::{FolderIdentity, folder_snapshot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ListSort {
-    /// Most recently touched first (entry and direct-child mtimes)
+    /// Most recently touched first (folder and direct-child mtimes)
     Recent,
-    /// Ascending by id (allocation order within a period)
+    /// Ascending by complete folder name
     Id,
 }
 
 #[derive(Debug, Serialize)]
-pub struct ListedTask {
+pub struct ListedFolder {
     pub id: String,
     pub period: String,
     pub sid_ref: String,
@@ -31,119 +30,148 @@ pub struct ListedTask {
 
 #[derive(Debug, Serialize)]
 pub struct ListResult {
-    pub tasks: Vec<ListedTask>,
+    pub folders: Vec<ListedFolder>,
     /// Project base for human rendering; not part of the JSON contract.
     #[serde(skip)]
     pub base: PathBuf,
 }
 
-/// Render for direct human use (ADR 0006). Explicitly not a machine
-/// interface: the format may change without a contract update; agents must
-/// parse the default JSON instead.
 pub fn render_human(result: &ListResult) -> String {
     let id_width = result
-        .tasks
+        .folders
         .iter()
-        .map(|task| task.id.len())
+        .map(|folder| folder.id.len())
         .max()
         .unwrap_or(0);
 
     let mut out = String::new();
-    for task in &result.tasks {
-        let modified = task
+    for folder in &result.folders {
+        let modified = folder
             .modified
             .get(..16)
-            .unwrap_or(&task.modified)
+            .unwrap_or(&folder.modified)
             .replace('T', " ");
-        let root = task
+        let root = folder
             .root
             .strip_prefix(&result.base)
-            .unwrap_or(&task.root)
+            .unwrap_or(&folder.root)
             .display();
-        out.push_str(&format!("{modified}  {:<id_width$}  {root}\n", task.id));
+        out.push_str(&format!("{modified}  {:<id_width$}  {root}\n", folder.id));
     }
     out
 }
 
-/// List every recognized-ref entry across the active root and configured
-/// scan roots: the same namespace view allocation uses. Listing and
-/// filtering are name-based — file types are never inspected, so
-/// non-directory reservations (zipped exports) appear too. Recency reads
-/// entry and direct-child modification times; metadata errors degrade to
-/// "old", never to failure.
-pub fn cmd_list(terms: Vec<String>, sort: ListSort, cwd: &Path) -> Result<ListResult> {
-    let config = load_project_config(cwd)?;
-    let terms: Vec<String> = terms.iter().map(|term| term.to_lowercase()).collect();
-    let mut entries: Vec<(SystemTime, ListedTask)> = Vec::new();
-
-    for root in &config.scan_roots {
-        for child in scan::scan_period_prefixed_children(root)? {
-            if !refcode::is_recognized_ref(&child.ref_segment) {
-                continue;
-            }
-
-            let slug = child.name.splitn(3, '_').nth(2).unwrap_or("").to_string();
-            let slug_lower = slug.to_lowercase();
-            if !terms
+pub fn cmd_list(terms: Vec<String>, sort: ListSort, config: &ProjectConfig) -> Result<ListResult> {
+    let terms = terms
+        .iter()
+        .map(|term| term.to_lowercase())
+        .collect::<Vec<_>>();
+    let folders = folder_snapshot(&config.root)?;
+    let mut entries = folders
+        .into_iter()
+        .filter(|folder| {
+            let slug = folder.slug.to_lowercase();
+            terms
                 .iter()
-                .all(|term| child.ref_segment.starts_with(term) || slug_lower.contains(term))
-            {
-                continue;
-            }
-
-            let touched = touch_time(&child.path);
-            entries.push((
-                touched,
-                ListedTask {
-                    id: child.name,
-                    period: child.period,
-                    sid_ref: child.ref_segment,
-                    slug,
-                    modified: DateTime::<Local>::from(touched)
-                        .to_rfc3339_opts(SecondsFormat::Secs, false),
-                    root: root.clone(),
-                    path: child.path,
-                },
-            ));
-        }
-    }
+                .all(|term| folder.sid_ref.starts_with(term) || slug.contains(term))
+        })
+        .map(|folder| {
+            let touched = touch_time(&folder.path);
+            let listed = listed_folder(folder, touched);
+            (touched, listed)
+        })
+        .collect::<Vec<_>>();
 
     match sort {
-        ListSort::Recent => entries.sort_by(|(at, a), (bt, b)| {
-            bt.cmp(at)
-                .then_with(|| a.id.cmp(&b.id))
-                .then_with(|| a.path.cmp(&b.path))
+        ListSort::Recent => entries.sort_by(|(left_time, left), (right_time, right)| {
+            right_time
+                .cmp(left_time)
+                .then_with(|| left.id.cmp(&right.id))
+                .then_with(|| left.path.cmp(&right.path))
         }),
-        ListSort::Id => {
-            entries.sort_by(|(_, a), (_, b)| a.id.cmp(&b.id).then_with(|| a.path.cmp(&b.path)))
-        }
+        ListSort::Id => entries.sort_by(|(_, left), (_, right)| {
+            left.id
+                .cmp(&right.id)
+                .then_with(|| left.path.cmp(&right.path))
+        }),
     }
 
     Ok(ListResult {
-        tasks: entries.into_iter().map(|(_, task)| task).collect(),
-        base: config.base,
+        folders: entries.into_iter().map(|(_, folder)| folder).collect(),
+        base: config.base.clone(),
     })
 }
 
-/// "Most recently touched" proxy: the entry's own mtime or its newest direct
-/// child's, whichever is later. Direct-child edits count; deeper edits do
-/// not (no recursion, by design), and child stats are lstat-like, so edits
-/// behind a symlinked child do not surface the folder either. Errors degrade
-/// to the epoch so a vanished entry sorts old instead of failing.
+fn listed_folder(folder: FolderIdentity, touched: SystemTime) -> ListedFolder {
+    ListedFolder {
+        id: folder.id,
+        period: folder.period,
+        sid_ref: folder.sid_ref,
+        slug: folder.slug,
+        modified: DateTime::<Local>::from(touched).to_rfc3339_opts(SecondsFormat::Secs, false),
+        root: folder.root,
+        path: folder.path,
+    }
+}
+
+/// Directory and direct-child mtimes form a best-effort recency proxy.
+/// Child symlinks are inspected with symlink_metadata so target writes do not
+/// affect the parent folder's order; failures degrade to the epoch.
 fn touch_time(path: &Path) -> SystemTime {
     let own = fs::symlink_metadata(path)
-        .and_then(|meta| meta.modified())
+        .and_then(|metadata| metadata.modified())
         .unwrap_or(UNIX_EPOCH);
-
     let Ok(children) = fs::read_dir(path) else {
         return own;
     };
+    children.flatten().fold(own, |latest, child| {
+        fs::symlink_metadata(child.path())
+            .and_then(|metadata| metadata.modified())
+            .map_or(latest, |modified| latest.max(modified))
+    })
+}
 
-    let mut latest = own;
-    for child in children.flatten() {
-        if let Ok(modified) = child.metadata().and_then(|meta| meta.modified()) {
-            latest = latest.max(modified);
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn human_rendering_uses_base_relative_root_and_empty_results() {
+        let result = ListResult {
+            folders: Vec::new(),
+            base: PathBuf::from("/tmp/project"),
+        };
+        assert_eq!(render_human(&result), "");
     }
-    latest
+
+    #[test]
+    fn missing_root_snapshot_is_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(
+            folder_snapshot(&tmp.path().join("missing"))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn recency_io_failure_degrades_to_epoch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("missing");
+
+        assert_eq!(touch_time(&missing), UNIX_EPOCH);
+    }
+
+    #[test]
+    fn real_directory_identity_name_parser_keeps_slugless_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("202610_sa2a7");
+        fs::create_dir(&path).unwrap();
+        let parsed = super::super::folders::parse_identity_name("202610_sa2a7").unwrap();
+        assert_eq!(
+            parsed,
+            ("202610".to_string(), "sa2a7".to_string(), String::new())
+        );
+    }
 }
