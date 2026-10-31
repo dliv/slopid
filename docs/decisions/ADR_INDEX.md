@@ -15,6 +15,7 @@ boundary. The current CLI contracts are in `docs/contracts/`.
   (amended by ADR 0006)
 - [6. Opt-In Human Output For Discovery Commands](0006-opt-in-human-output-for-discovery.md)
 - [9. Identity-Only Lint](0009-identity-only-lint.md)
+- [10. Compiler-Backed Native Architecture Gate](0010-compiler-backed-native-architecture-gate.md)
 
 ADRs 0007 and 0008 describe the retired document-reader and workflow-mutation
 surfaces. Their implementation and active instructions were removed for the

@@ -12,6 +12,10 @@ use cli::{Cli, Command};
 use commands::ResolveError;
 use failure::{AmbiguousCandidate, Failure, report_failure, write_json, write_text};
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Process exit belongs to the CLI composition root."
+)]
 pub fn main_entry() {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
@@ -94,6 +98,10 @@ fn run(cli: Cli) -> Result<i32, Failure> {
     Ok(0)
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "The working directory is read at the CLI composition root."
+)]
 fn current_dir() -> Result<std::path::PathBuf, Failure> {
     std::env::current_dir().map_err(|error| Failure::Runtime(error.into()))
 }

@@ -6,6 +6,11 @@ satisfies them.
 
 ## Testing
 
+Read [`docs/architecture.md`](docs/architecture.md) before changing compiler
+policy, validation wiring, or architecture boundaries. It owns the current
+rules, exceptions, enforcement classes, and nonclaims. Run `just check` before
+implementation commits; CI runs the same gate.
+
 For numeric bounds and other thresholds, test both sides of the boundary. For
 example, if a rule changes at `n > limit`, include one test proving `limit` is
 still accepted and another proving `limit + 1` is rejected.

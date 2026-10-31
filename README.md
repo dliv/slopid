@@ -106,13 +106,14 @@ Do not invent refs by hand for durable task folders.
 
 ```sh
 cargo build --locked
-cargo test --locked
-cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
+just check
 ```
 
-Durable behavior is documented in [`docs/contracts/`](docs/contracts/), and
-architecture decisions live in [`docs/decisions/`](docs/decisions/).
+`just check` is the complete local gate and the command CI runs. The current
+compiler rules, exceptions, and their limits are in
+[`docs/architecture.md`](docs/architecture.md). Durable behavior is documented
+in [`docs/contracts/`](docs/contracts/), and architecture decisions live in
+[`docs/decisions/`](docs/decisions/).
 
 ## License
 

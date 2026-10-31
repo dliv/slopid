@@ -14,6 +14,10 @@ fn run(dir: &Path, args: &[&str]) -> Output {
     sid().args(args).current_dir(dir).output().unwrap()
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "The CLI subprocess is the subject of this integration test."
+)]
 fn run_bounded(dir: &Path, args: &[&str], timeout: Duration) -> Output {
     let child = Command::new(env!("CARGO_BIN_EXE_sid"))
         .args(args)
@@ -25,6 +29,10 @@ fn run_bounded(dir: &Path, args: &[&str], timeout: Duration) -> Output {
     wait_bounded(child, timeout, args)
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "The test timeout uses a monotonic clock to bound its child process."
+)]
 fn wait_bounded(mut child: Child, timeout: Duration, args: &[&str]) -> Output {
     let deadline = Instant::now() + timeout;
     loop {
@@ -118,6 +126,10 @@ fn set_mtime(path: &Path, when: SystemTime) {
 }
 
 #[cfg(unix)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "This integration test creates a FIFO to verify nonblocking discovery."
+)]
 fn make_fifo(path: &Path) {
     let status = Command::new("mkfifo").arg(path).status().unwrap();
     assert!(status.success(), "mkfifo failed for {}", path.display());
@@ -607,6 +619,10 @@ fn list_human_output_is_plain_and_does_not_change_machine_errors() {
 }
 
 #[cfg(unix)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "The test clock creates ordered file timestamps for recency assertions."
+)]
 #[test]
 fn recency_uses_direct_child_metadata_without_following_child_symlinks() {
     use std::os::unix::fs::symlink;

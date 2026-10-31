@@ -1,0 +1,27 @@
+disallowed-methods = [
+    { path = "std::env::args", reason = "Pass process arguments at the composition root." },
+    { path = "std::env::args_os", reason = "Pass process arguments at the composition root." },
+    { path = "std::env::var", reason = "Read configuration at the composition root." },
+    { path = "std::env::var_os", reason = "Read configuration at the composition root." },
+    { path = "std::env::current_dir", reason = "Pass the working directory at the composition root." },
+    { path = "std::env::set_current_dir", reason = "Pass paths explicitly instead of changing process state." },
+    { path = "std::time::SystemTime::now", reason = "Pass wall-clock time into the operation." },
+    { path = "std::time::Instant::now", reason = "Pass monotonic time into the operation." },
+    { path = "chrono::Local::now", reason = "Pass the period or clock input into the operation." },
+    { path = "chrono::Utc::now", reason = "Pass the period or clock input into the operation." },
+    { path = "fastrand::shuffle", reason = "Pass randomness into the operation." },
+    { path = "std::process::exit", reason = "Return outcomes to the composition root." },
+    { path = "std::process::abort", reason = "Return outcomes to the composition root." },
+    { path = "std::process::Command::new", reason = "Keep child-process ownership at an explicit boundary." },
+    { path = "std::io::stdin", reason = "Pass input through an explicit boundary." },
+    { path = "std::io::stdout", reason = "Keep output at the composition root." },
+    { path = "std::io::stderr", reason = "Keep output at the composition root." },
+]
+
+disallowed-macros = [
+    "std::print",
+    "std::println",
+    "std::eprint",
+    "std::eprintln",
+    "std::dbg",
+]

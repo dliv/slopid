@@ -91,6 +91,10 @@ struct ErrorBody {
     candidates: Option<Vec<AmbiguousCandidate>>,
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Process failure output and exit belong to the CLI composition root."
+)]
 pub fn report_failure(failure: Failure) -> ! {
     let code = failure.exit_code();
     let mut stderr = io::stderr().lock();
@@ -99,6 +103,10 @@ pub fn report_failure(failure: Failure) -> ! {
     std::process::exit(code)
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "JSON output belongs to the CLI composition root."
+)]
 pub fn write_json<T: Serialize>(value: &T) -> Result<(), Failure> {
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
@@ -107,6 +115,10 @@ pub fn write_json<T: Serialize>(value: &T) -> Result<(), Failure> {
     writeln!(stdout).map_err(|error| Failure::Output(error.into()))
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Text output belongs to the CLI composition root."
+)]
 pub fn write_text(value: &str) -> Result<(), Failure> {
     let stdout = io::stdout();
     stdout

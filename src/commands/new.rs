@@ -110,6 +110,10 @@ pub fn cmd_new(
 
     execute_new(&plan)
 }
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Clock input remains temporary pending composition-root ownership."
+)]
 pub(crate) fn current_period() -> String {
     chrono::Local::now().format("%Y%m").to_string()
 }
@@ -252,6 +256,10 @@ fn candidate_to_result(plan: &NewPlan, candidate: &NewCandidate, dry_run: bool) 
     }
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Randomness remains temporary pending composition-root ownership."
+)]
 fn randomized_tail_space() -> Vec<RefTail> {
     let mut tails = Vec::with_capacity(TAIL_SPACE_SIZE);
     for hi in refcode::SLOP30_CHARS {

@@ -26,3 +26,10 @@ tempfile = "3"
 [[bin]]
 name = "sid"
 path = "src/bin/sid.rs"
+
+[lints.rust]
+unfulfilled_lint_expectations = "deny"
+
+[lints.clippy]
+disallowed_methods = "deny"
+disallowed_macros = "deny"
