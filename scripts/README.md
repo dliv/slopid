@@ -18,9 +18,12 @@ separate groups in `clippy_policy_expectations.json`.
 The control also creates five compile-only libraries in a fresh temporary
 directory. Each copies the actual `Cargo.toml`, `Cargo.lock`, and `clippy.toml`,
 uses an explicit scratch Cargo target directory, and runs normal warnings-
-denied Clippy without force flags. An effect-free library and a fulfilled
-method expectation must pass. An aliased banned method, `println!`, and a stale
-expectation must fail with respectively
+denied Clippy without force flags. Cargo runs from the repository root with an
+explicit fixture `--manifest-path`, so repository `.cargo/config.toml` settings
+also apply to these controls. `CLIPPY_CONF_DIR` still points to each fixture's
+copied Clippy config, and `CARGO_TARGET_DIR` points to the shared scratch target.
+An effect-free library and a fulfilled method expectation must pass. An aliased
+banned method, `println!`, and a stale expectation must fail with respectively
 `clippy::disallowed_methods`, `clippy::disallowed_macros`, and
 `unfulfilled_lint_expectations`. No fixture function is run.
 

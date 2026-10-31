@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import sys
 import tempfile
@@ -19,6 +20,7 @@ from check_clippy_policy import (  # noqa: E402
     InventoryKey,
     PolicyFailure,
     _run,
+    _run_fixtures,
     compare_inventory,
     inventory_from_json,
 )
@@ -115,6 +117,51 @@ class ProcessLifecycleTests(unittest.TestCase):
                         os.waitpid(child_pid, 0)
                     except ChildProcessError:
                         pass
+
+
+class FixtureCargoConfigurationTests(unittest.TestCase):
+    def test_repository_cargo_config_applies_to_fixture_controls(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repository = root / "repository"
+            scratch = root / "scratch"
+            repository.mkdir()
+            scratch.mkdir()
+            (repository / "Cargo.toml").write_text(
+                "[package]\n"
+                'name = "policy-fixture"\n'
+                'version = "0.1.0"\n'
+                'edition = "2024"\n\n'
+                "[lints.rust]\n"
+                'unfulfilled_lint_expectations = "deny"\n\n'
+                "[lints.clippy]\n"
+                'disallowed_methods = "deny"\n'
+                'disallowed_macros = "deny"\n',
+                encoding="utf-8",
+            )
+            (repository / "Cargo.lock").write_text(
+                "version = 4\n\n"
+                "[[package]]\n"
+                'name = "policy-fixture"\n'
+                'version = "0.1.0"\n',
+                encoding="utf-8",
+            )
+            shutil.copyfile(REPOSITORY / "clippy.toml", repository / "clippy.toml")
+            cargo_config = repository / ".cargo" / "config.toml"
+            cargo_config.parent.mkdir()
+            cargo_config.write_text(
+                '[build]\nrustflags = ["-Aunfulfilled_lint_expectations"]\n',
+                encoding="utf-8",
+            )
+
+            stale_diagnostic = (
+                "fixture 'stale-expectation' did not fail only for "
+                "unfulfilled_lint_expectations"
+            )
+            with self.assertRaises(PolicyFailure) as failure:
+                _run_fixtures(repository, scratch)
+            self.assertIn(stale_diagnostic, str(failure.exception))
+            self.assertIn("diagnostics: []", str(failure.exception))
 
 
 class InventoryTests(unittest.TestCase):

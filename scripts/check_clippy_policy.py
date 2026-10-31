@@ -458,6 +458,8 @@ def _run_fixtures(repository: Path, scratch: Path) -> None:
         command = [
             "cargo",
             "clippy",
+            "--manifest-path",
+            str((fixture / "Cargo.toml").resolve()),
             "--locked",
             "--lib",
             "--message-format=json",
@@ -465,7 +467,12 @@ def _run_fixtures(repository: Path, scratch: Path) -> None:
             "-D",
             "warnings",
         ]
-        result = _run(command, fixture, environment, f"{case_name} fixture Clippy")
+        result = _run(
+            command,
+            repository,
+            environment,
+            f"{case_name} fixture Clippy",
+        )
         _require_fixture_result(
             result,
             expected_lint=expected_lint,
