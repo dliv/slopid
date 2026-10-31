@@ -304,6 +304,7 @@ def _run(
     cwd: Path,
     environment: dict[str, str],
     purpose: str,
+    timeout: int = COMMAND_TIMEOUT_SECONDS,
 ) -> CommandResult:
     try:
         process = subprocess.Popen(
@@ -320,24 +321,40 @@ def _run(
             f"could not start {purpose}: {shlex.join(command)}: {error}"
         ) from error
     try:
-        stdout, stderr = process.communicate(timeout=COMMAND_TIMEOUT_SECONDS)
+        stdout, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired as error:
-        if os.name == "posix":
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        else:
-            try:
-                process.kill()
-            except ProcessLookupError:
-                pass
-        stdout, stderr = process.communicate()
+        stdout, stderr = _terminate_and_drain(process)
         raise PolicyFailure(
-            f"{purpose} timed out after {COMMAND_TIMEOUT_SECONDS}s: {shlex.join(command)}\n"
+            f"{purpose} timed out after {timeout}s: {shlex.join(command)}\n"
             f"stdout:\n{stdout}\nstderr:\n{stderr}"
         ) from error
+    except BaseException:
+        _terminate_and_drain(process)
+        raise
     return CommandResult(tuple(command), cwd, process.returncode, stdout, stderr)
+
+
+def _terminate_and_drain(process: subprocess.Popen[str]) -> tuple[str, str]:
+    interrupted = False
+    while True:
+        try:
+            if os.name == "posix":
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            elif process.poll() is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+            output = process.communicate()
+            break
+        except KeyboardInterrupt:
+            interrupted = True
+    if interrupted:
+        raise KeyboardInterrupt
+    return output
 
 
 def _command_failure(result: CommandResult, detail: str) -> PolicyFailure:
