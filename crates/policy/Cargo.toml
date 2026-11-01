@@ -5,7 +5,8 @@ edition = "2024"
 publish = false
 
 [dev-dependencies]
-arch-gates = { git = "file:///Users/davidlivingston/aw/p/arch-gates", rev = "76a3861dd133515660819ad4376087a01ffb148b" }
+toml = "0.8"
+arch-gates = { git = "file:///Users/davidlivingston/aw/p/arch-gates", rev = "34b33664e227c99376ae03b3ff628da00618a507" }
 
 [lints]
 workspace = true

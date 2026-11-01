@@ -6,3 +6,8 @@ mod support;
 
 #[path = "checks/packages.rs"]
 mod packages;
+
+#[path = "checks/native.rs"]
+mod native;
+#[path = "checks/source.rs"]
+mod source;

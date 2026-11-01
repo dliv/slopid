@@ -9,7 +9,10 @@ workspace tests/Clippy and the native compiler controls. Python 3.11+ is needed.
 
 `tests/checks/graph.rs` invokes shared coverage/direction over the full map in
 `tests/support/mod.rs`, with consumer-owned workspace/file observation and
-exact transition allowances. Root profiles remain later work. File selection is local; shared scanner fixtures are tested in
+exact transition allowances. Root and external-reference checks in `tests/checks/source.rs` use that same
+map and local permissions/allowances. `tests/checks/native.rs` guards Slopid's
+method/macro/lint baseline and pairs Root environment permissions with native
+bans. File selection is local; shared scanner fixtures are tested in
 the engine, and local valid/violation controls exercise the consumer call.
 The local Git pin requires this machine and must be replaced and independently
 qualified after engine publication. No runtime package depends on tooling.

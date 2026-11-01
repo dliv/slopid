@@ -134,8 +134,10 @@ currently pin an immutable **local Git** revision: this checkpoint needs this
 machine's engine checkout and has no portable/remote-CI qualification yet.
 Publication and replacement with a published revision remain separate work.
 
-Source-level external Pure dependency restrictions, Root profiles and traits
-remain later work. Package dependency evaluation is described below. Source coverage and import direction are now
+Source-level external Pure dependency restrictions and Root profiles now run
+through the shared scanner, as described below. Trait acceptance has not been
+adopted for Slopid; Workforest's no-traits rule is not imported. Package dependency
+evaluation is described below. Source coverage and import direction are now
 covered by the shared checks described below. Pure source scans
 skip recognized test modules and do not resolve types, expand macros or inspect
 dependency internals. Fixed build inputs remain permitted. The selected files
@@ -191,3 +193,34 @@ Normal `just check` runs the package test alongside coverage/direction/Pure test
 The product runtime, version and release workflow remain unchanged. Local Git
 pins still require publication and independent portable qualification before
 consumer pushes. See ADR 0011 and the policy README.
+
+## Shared Root and external-source checks
+
+The local `tests/checks/source.rs` scans all four Root files selected by the
+same role map. Root forbids filesystem, network, thread, path-query and escape
+forms. Its only permitted environment names are `args_os`, `ArgsOs`, `var`,
+`var_os` and `current_dir`; namespace imports are checked at their uses.
+`current_exe` remains forbidden. Process, time and stream forms are left to the
+existing compiler controls, which continue to inventory their sanctioned sites.
+The shared engine discovers forms from supplied source; this consumer reads
+files and chooses permissions. Missing reads and empty selections fail.
+
+Pure files may refer only to `anyhow` and `serde` among declared external
+normal dependencies. The source checker uses dependency names from each file's
+own package manifest, including ordinary renamed import names. Unused Pure
+allowances fail. This list is shared with local package policy; it does not
+claim dependency internals are pure or that a mixed package is a Pure build unit.
+
+`tests/checks/native.rs` parses the real Clippy and root Cargo configuration.
+It requires Slopid's adopted method/macro baseline and denied workspace lint
+levels, and pairs each permitted Root environment function with its native ban.
+It accepts stronger lint levels. The `ArgsOs` type needs no method ban. These
+are Slopid's controls, not the union of consumer bans. The existing Python
+compiler adapter, five compile-only controls and site inventory remain the
+assembled compiler proof. Configuration checks alone do not prove a lint fires.
+
+Shared Root/external/trait/token fixtures run in the engine's own suite;
+Slopid invokes its actual-source checks from normal `just check`. Trait
+discovery is available to consumers, but this slice adds no Slopid trait
+restriction. Source grammar, macro/type-resolution and transitive-purity limits
+remain as above. See ADR 0012.

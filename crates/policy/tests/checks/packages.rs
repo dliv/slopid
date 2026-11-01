@@ -6,7 +6,6 @@ const CRATES: &[(&str, CrateClass)] = &[
     ("slop-id", CrateClass::Binary),
     ("slop-id-policy", CrateClass::Tooling),
 ];
-const PURE_ALLOWED: &[(&str, &[&str])] = &[("anyhow", &[]), ("serde", &["derive"])];
 
 fn permits(from: CrateClass, to: CrateClass) -> Result<(), &'static str> {
     use CrateClass::*;
@@ -36,7 +35,7 @@ fn workspace_packages_follow_local_policy() {
         &members,
         CRATES,
         ExternalAllowlists {
-            pure: PURE_ALLOWED,
+            pure: support::PURE_ALLOWED,
             effectful: &[],
             edge: &[],
         },

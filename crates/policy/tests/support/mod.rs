@@ -101,3 +101,10 @@ pub fn workspace_members() -> Vec<arch_gates::metadata::Member> {
         })
         .collect()
 }
+
+// Environment names accepted by the Root source scan. Callable names are paired
+// with the real native ban list in checks/native.rs. No current_exe permission.
+pub const ROOT_ALLOWED_ENV: &[&str] = &["args_os", "ArgsOs", "var", "var_os", "current_dir"];
+
+// Current selected Pure modules need only these external dependencies.
+pub const PURE_ALLOWED: &[(&str, &[&str])] = &[("anyhow", &[]), ("serde", &["derive"])];
