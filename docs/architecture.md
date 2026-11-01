@@ -120,7 +120,7 @@ architecture adoption.
 
 ## First shared Pure-source check
 
-The policy test in `crates/policy/tests/pure.rs` reads the three currently
+The policy test in `crates/policy/tests/checks/pure.rs` reads the three currently
 selected Pure files: `src/refcode.rs`, `src/slug.rs`, and
 `src/commands/agent_instructions.rs`. It passes their source to arch-gates'
 `check_pure_source`, failing on named ambient source forms. The local caller
@@ -134,10 +134,35 @@ currently pin an immutable **local Git** revision: this checkpoint needs this
 machine's engine checkout and has no portable/remote-CI qualification yet.
 Publication and replacement with a published revision remain separate work.
 
-This first slice does not classify every source file or enforce import/package
-edges, external Pure dependencies, Root profiles or traits. Pure source scans
+Package dependency checks, external Pure dependency restrictions, Root profiles
+and traits remain later work. Source coverage and import direction are now
+covered by the shared checks described below. Pure source scans
 skip recognized test modules and do not resolve types, expand macros or inspect
 dependency internals. Fixed build inputs remain permitted. The selected files
 passing this scan do not establish transitive purity or completed package split.
 The remaining mixed modules and root-owned time/random inputs stay explicit
 follow-up work. See [policy tooling](../crates/policy/README.md).
+
+## Source coverage and import direction
+
+`crates/policy/tests/support/mod.rs` owns Slopid's full 16-file map and the
+Root/Pure/Effectful role matrix. Policy tests obtain all workspace members from
+local Cargo metadata and walk every non-policy member's `src` directory,
+including newly added product members. Missing reads/metadata are failures.
+The shared coverage evaluator rejects missing, stale, duplicate or malformed
+classification entries. Pure selection reads that same local map.
+
+Root may reference production roles; Pure references Pure; Effectful references
+Pure or Effectful. The shared direction evaluator applies this local predicate
+and exact exceptions. `commands::resolve -> failure` temporarily permits use of
+AmbiguousCandidate data colocated with root output/exit. Remove it when outcome
+types move; stale/duplicate exceptions fail. Nine named Effectful files are
+explicit temporary allowances in the mixed root package; the local test rejects
+stale or added allowances. This is not the completed package split.
+
+These checks run in the single `policy` integration test target in normal
+`just check`. The engine follows crate/self/super paths and the donor's tested
+inline-module grammar; it ignores bare child names and child edges and does not
+expand macros. Coverage proves conventional Rust-file inventory, not complete
+Rust module resolution. Import discovery cannot establish a complete semantic
+graph or absence of cycles. Native compiler gates retain their separate claims.

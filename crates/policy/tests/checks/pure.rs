@@ -1,11 +1,6 @@
 use std::path::Path;
 
-// File selection is Slopid policy; mixed files await later separation.
-const PURE_FILES: &[&str] = &[
-    "src/refcode.rs",
-    "src/slug.rs",
-    "src/commands/agent_instructions.rs",
-];
+use crate::support;
 
 #[test]
 fn pure_modules_have_no_ambient_effects() {
@@ -13,9 +8,16 @@ fn pure_modules_have_no_ambient_effects() {
         .join("../..")
         .canonicalize()
         .unwrap();
-    assert!(!PURE_FILES.is_empty());
+    assert!(
+        support::MODULES
+            .iter()
+            .any(|(_, role)| *role == support::Role::Pure)
+    );
     let mut violations = Vec::new();
-    for file in PURE_FILES {
+    for (file, role) in support::MODULES {
+        if *role != support::Role::Pure {
+            continue;
+        }
         let source = std::fs::read_to_string(root.join(file)).unwrap();
         violations.extend(arch_gates::check_pure_source(file, &source));
     }
