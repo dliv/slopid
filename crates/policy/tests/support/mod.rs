@@ -79,24 +79,25 @@ fn walk(root: &Path, directory: &Path, found: &mut BTreeSet<String>) {
 /// Consumer-local observation; discover unknown product members as well as the current app.
 pub fn discovered_files() -> BTreeSet<String> {
     let root = root();
-    let metadata: serde_json::Value =
-        serde_json::from_str(&slop_id_policy::cargo_metadata(&root).unwrap()).unwrap();
-    let members = metadata["workspace_members"].as_array().unwrap();
-    assert!(!members.is_empty(), "workspace has no members");
     let mut found = BTreeSet::new();
-    for member in members {
-        let package = metadata["packages"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|package| package["id"] == *member)
-            .expect("workspace member absent from packages");
-        if package["name"] == "slop-id-policy" {
+    for member in workspace_members() {
+        if member.name == "slop-id-policy" {
             continue;
         }
-        let manifest = Path::new(package["manifest_path"].as_str().unwrap());
-        walk(&root, &manifest.parent().unwrap().join("src"), &mut found);
+        walk(&root, &root.join(&member.dir).join("src"), &mut found);
     }
     assert!(!found.is_empty(), "no production Rust sources discovered");
     found
+}
+
+/// Observation stays local; engine parses only caller-supplied JSON/manifest text.
+pub fn workspace_members() -> Vec<arch_gates::metadata::Member> {
+    arch_gates::metadata::parse_members(&slop_id_policy::cargo_metadata(&root()).unwrap())
+        .unwrap()
+        .into_iter()
+        .map(|listed| {
+            let text = std::fs::read_to_string(&listed.manifest_path).unwrap();
+            listed.with_manifest(&text)
+        })
+        .collect()
 }

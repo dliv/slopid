@@ -134,8 +134,8 @@ currently pin an immutable **local Git** revision: this checkpoint needs this
 machine's engine checkout and has no portable/remote-CI qualification yet.
 Publication and replacement with a published revision remain separate work.
 
-Package dependency checks, external Pure dependency restrictions, Root profiles
-and traits remain later work. Source coverage and import direction are now
+Source-level external Pure dependency restrictions, Root profiles and traits
+remain later work. Package dependency evaluation is described below. Source coverage and import direction are now
 covered by the shared checks described below. Pure source scans
 skip recognized test modules and do not resolve types, expand macros or inspect
 dependency internals. Fixed build inputs remain permitted. The selected files
@@ -166,3 +166,28 @@ inline-module grammar; it ignores bare child names and child edges and does not
 expand macros. Coverage proves conventional Rust-file inventory, not complete
 Rust module resolution. Import discovery cannot establish a complete semantic
 graph or absence of cycles. Native compiler gates retain their separate claims.
+
+## Shared metadata and package dependencies
+
+Local support reads raw Cargo metadata through the existing normal-library
+adapter and calls `arch_gates::metadata::parse_members`. Only explicit workspace
+IDs are selected; absent/duplicate IDs or malformed selected records fail.
+Support reads manifests and supplies text for shared lint-inheritance facts.
+Coverage now uses this same member model; source reads and subprocess work
+remain consumer-owned and the engine stays a policy dev-dependency.
+
+`tests/checks/packages.rs` classifies the current runtime package Binary and
+policy package Tooling. It retains the mixed-root transition rather than claiming
+Pure/effectful build units exist already. The shared evaluator rejects missing,
+duplicate or stale package classes, missing workspace lint inheritance, outside
+member path dependencies, and forbidden local/external Tooling targets. Production
+cannot depend on `arch-gates` under an alias or in normal/build/dev tables;
+Tooling may use it only as a dev-dependency. Slopid owns internal direction/reason
+policy; the engine does not prescribe its layout. Declared/forwarded Pure feature
+checks apply once Pure build units are classified; this does not newly restrict
+all dependencies of today's mixed runtime package.
+
+Normal `just check` runs the package test alongside coverage/direction/Pure tests.
+The product runtime, version and release workflow remain unchanged. Local Git
+pins still require publication and independent portable qualification before
+consumer pushes. See ADR 0011 and the policy README.
