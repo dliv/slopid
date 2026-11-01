@@ -11,10 +11,10 @@ format:
     cargo fmt --all -- --check
 
 clippy:
-    cargo clippy --locked --all-targets -- -D warnings
+    cargo clippy --workspace --locked --all-targets -- -D warnings
 
 test:
-    cargo test --locked
+    cargo test --workspace --locked
 
 adapter-tests:
     PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -p 'test_*.py'

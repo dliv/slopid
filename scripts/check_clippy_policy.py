@@ -11,6 +11,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import tomllib
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -79,6 +80,8 @@ def _scope_for_path(relative_file: str) -> str:
         return "production"
     if first == "tests":
         return "test"
+    if Path(relative_file).parts[:2] == ("crates", "policy"):
+        return "tooling"
     return "other"
 
 
@@ -272,12 +275,14 @@ def _load_expectations(path: Path) -> Counter[InventoryKey]:
         raise PolicyFailure("inventory expectation document must be a JSON object")
     production = _read_site_group(document.get("production_sites"), "production")
     tests = _read_site_group(document.get("test_sites"), "test")
-    combined = production + tests
+    tooling = _read_site_group(document.get("tooling_sites", []), "tooling")
+    combined = production + tests + tooling
     for field, lint in (
         ("production_macro_count", "production"),
         ("test_macro_count", "test"),
+        ("tooling_macro_count", "tooling"),
     ):
-        count = document.get(field)
+        count = document.get(field, 0) if field == "tooling_macro_count" else document.get(field)
         if not isinstance(count, int) or isinstance(count, bool) or count < 0:
             raise PolicyFailure(f"{field} must be a non-negative integer")
         expected_count = sum(
@@ -442,13 +447,43 @@ def _fixture_sources() -> dict[str, tuple[str, str | None]]:
     }
 
 
+def _prepare_workspace_fixture(repository: Path, fixture: Path) -> str:
+    """Retain real manifests/lints/dependencies; replace only target source."""
+    document = tomllib.loads((repository / "Cargo.toml").read_text(encoding="utf-8"))
+    members = {Path(".")}
+    for pattern in document.get("workspace", {}).get("members", []):
+        matches = list(repository.glob(pattern))
+        if not matches:
+            raise PolicyFailure(f"workspace fixture member pattern has no matches: {pattern}")
+        for member in matches:
+            relative = member.resolve().relative_to(repository.resolve())
+            members.add(relative)
+    for relative in sorted(members):
+        origin = repository / relative / "Cargo.toml"
+        manifest = tomllib.loads(origin.read_text(encoding="utf-8"))
+        destination = fixture / relative
+        destination.mkdir(parents=True, exist_ok=True)
+        (destination / "Cargo.toml").write_bytes(origin.read_bytes())
+        if "package" not in manifest:
+            continue
+        library = destination / manifest.get("lib", {}).get("path", "src/lib.rs")
+        library.parent.mkdir(parents=True, exist_ok=True)
+        library.write_text("// Compile-only workspace placeholder.\n", encoding="utf-8")
+        for binary in manifest.get("bin", []):
+            target = destination / binary.get("path", f"src/bin/{binary['name']}.rs")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("fn main() {}\n", encoding="utf-8")
+    for name in ("Cargo.lock", "clippy.toml"):
+        (fixture / name).write_bytes((repository / name).read_bytes())
+    return document["package"]["name"]
+
+
 def _run_fixtures(repository: Path, scratch: Path) -> None:
     shared_target = scratch / "target"
     for case_name, (source, expected_lint) in _fixture_sources().items():
         fixture = scratch / case_name
         (fixture / "src" / "bin").mkdir(parents=True)
-        for name in ("Cargo.toml", "Cargo.lock", "clippy.toml"):
-            (fixture / name).write_bytes((repository / name).read_bytes())
+        package = _prepare_workspace_fixture(repository, fixture)
         (fixture / "src" / "lib.rs").write_text(source, encoding="utf-8")
         (fixture / "src" / "bin" / "sid.rs").write_text("fn main() {}\n", encoding="utf-8")
 
@@ -461,6 +496,8 @@ def _run_fixtures(repository: Path, scratch: Path) -> None:
             "--manifest-path",
             str((fixture / "Cargo.toml").resolve()),
             "--locked",
+            "--package",
+            package,
             "--lib",
             "--message-format=json",
             "--",
@@ -480,7 +517,7 @@ def _run_fixtures(repository: Path, scratch: Path) -> None:
         )
 
 
-def run_policy_control(repository: Path = ROOT) -> tuple[int, int]:
+def run_policy_control(repository: Path = ROOT) -> tuple[int, int, int]:
     expected = _load_expectations(EXPECTATIONS)
     environment = _clean_environment()
     environment["CLIPPY_CONF_DIR"] = str(repository.resolve())
@@ -488,6 +525,7 @@ def run_policy_control(repository: Path = ROOT) -> tuple[int, int]:
         "cargo",
         "clippy",
         "--locked",
+        "--workspace",
         "--all-targets",
         "--message-format=json",
         "--",
@@ -512,19 +550,20 @@ def run_policy_control(repository: Path = ROOT) -> tuple[int, int]:
         count for key, count in observed.items() if key.scope == "production"
     )
     test_sites = sum(count for key, count in observed.items() if key.scope == "test")
-    return production_sites, test_sites
+    tooling_sites = sum(count for key, count in observed.items() if key.scope == "tooling")
+    return production_sites, test_sites, tooling_sites
 
 
 def main() -> int:
     try:
-        production_sites, test_sites = run_policy_control()
+        production_sites, test_sites, tooling_sites = run_policy_control()
     except PolicyFailure as error:
         print(f"Clippy policy control failed:\n{error}", file=sys.stderr)
         return 1
     print(
         "Clippy policy control passed: "
         f"{production_sites} production sites, {test_sites} test sites, "
-        "0 production/test macro sites, 5 compile-only cases."
+        f"{tooling_sites} tooling sites, 0 macro sites, 5 compile-only cases."
     )
     return 0
 

@@ -120,6 +120,29 @@ class ProcessLifecycleTests(unittest.TestCase):
 
 
 class FixtureCargoConfigurationTests(unittest.TestCase):
+    def test_workspace_members_and_inherited_lints_survive_fixtures(self) -> None:
+        with tempfile.TemporaryDirectory() as repository_dir, tempfile.TemporaryDirectory() as scratch_dir:
+            repository = Path(repository_dir)
+            (repository / "Cargo.toml").write_text(
+                '[package]\nname="fixture-app"\nversion="0.1.0"\nedition="2024"\n'
+                '[workspace]\nmembers=["crates/policy"]\nresolver="3"\n'
+                '[workspace.lints.rust]\nunfulfilled_lint_expectations="deny"\n'
+                '[workspace.lints.clippy]\ndisallowed_methods="deny"\ndisallowed_macros="deny"\n'
+                '[lints]\nworkspace=true\n'
+            )
+            member = repository / "crates/policy"
+            member.mkdir(parents=True)
+            (member / "Cargo.toml").write_text(
+                '[package]\nname="fixture-policy"\nversion="0.0.0"\nedition="2024"\n'
+                '[lints]\nworkspace=true\n'
+            )
+            (repository / "Cargo.lock").write_text(
+                'version = 4\n\n[[package]]\nname="fixture-app"\nversion="0.1.0"\n'
+                '\n[[package]]\nname="fixture-policy"\nversion="0.0.0"\n'
+            )
+            shutil.copyfile(REPOSITORY / "clippy.toml", repository / "clippy.toml")
+            _run_fixtures(repository, Path(scratch_dir))
+
     def test_repository_cargo_config_applies_to_fixture_controls(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -165,6 +188,11 @@ class FixtureCargoConfigurationTests(unittest.TestCase):
 
 
 class InventoryTests(unittest.TestCase):
+    def test_policy_library_diagnostic_is_tooling(self) -> None:
+        actual = inventory_from_json(cargo_diagnostic(file="crates/policy/src/lib.rs"), REPOSITORY)
+        key = InventoryKey("crates/policy/src/lib.rs", "clippy::disallowed_methods", "std::env::current_dir", "tooling")
+        self.assertEqual(actual, Counter({key: 1}))
+
     def test_duplicate_lib_and_lib_test_reports_are_one_compiled_site(self) -> None:
         repeated = cargo_diagnostic()
         actual = inventory_from_json(f"{repeated}\n{repeated}\n", REPOSITORY)

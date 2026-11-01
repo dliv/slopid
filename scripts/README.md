@@ -5,19 +5,21 @@ Cargo's JSON diagnostics and Slopid's checked inventory. Run it with
 `python3 scripts/check_clippy_policy.py`, or as the last step of `just check`.
 The focused adapter tests live in [`tests/`](tests/).
 
-The adapter runs all-target Clippy against this repository with the root
+The Python 3.11+ adapter runs workspace-wide all-target Clippy against this repository with the root
 `clippy.toml`, force-warnings only for the two named ban lints, and compiler
 override variables cleared in its child process. It requires Cargo success,
 valid JSON records, no compiler errors, and no unexpected warning identity.
 It normalizes primary source paths under the repository and counts a site by
 relative file, lint code, canonical banned item, and source span. Identical
 diagnostics repeated for the same compiled source span are counted once;
-distinct spans remain distinct. Expected production and test sites are kept in
+distinct spans remain distinct. Expected production, test and tooling sites are kept in
 separate groups in `clippy_policy_expectations.json`.
 
 The control also creates five compile-only libraries in a fresh temporary
-directory. Each copies the actual `Cargo.toml`, `Cargo.lock`, and `clippy.toml`,
-uses an explicit scratch Cargo target directory, and runs normal warnings-
+directory. Each preserves the actual root/member manifests, workspace lint inheritance,
+`Cargo.lock`, and `clippy.toml`, creates minimal member target placeholders,
+uses an explicit scratch Cargo target directory, selects the synthetic product
+library, and runs normal warnings-
 denied Clippy without force flags. Cargo runs from the repository root with an
 explicit fixture `--manifest-path`, so repository `.cargo/config.toml` settings
 also apply to these controls. `CLIPPY_CONF_DIR` still points to each fixture's

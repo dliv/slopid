@@ -27,9 +27,16 @@ tempfile = "3"
 name = "sid"
 path = "src/bin/sid.rs"
 
-[lints.rust]
+[workspace]
+members = ["crates/policy"]
+resolver = "3"
+
+[lints]
+workspace = true
+
+[workspace.lints.rust]
 unfulfilled_lint_expectations = "deny"
 
-[lints.clippy]
+[workspace.lints.clippy]
 disallowed_methods = "deny"
 disallowed_macros = "deny"

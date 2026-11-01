@@ -14,5 +14,9 @@
     {"file": "tests/identity_cli_test.rs", "lint": "clippy::disallowed_methods", "item": "std::time::SystemTime::now", "count": 1}
   ],
   "production_macro_count": 0,
-  "test_macro_count": 0
+  "test_macro_count": 0,
+  "tooling_sites": [
+    {"file": "crates/policy/src/lib.rs", "lint": "clippy::disallowed_methods", "item": "std::process::Command::new", "count": 1}
+  ],
+  "tooling_macro_count": 0
 }
