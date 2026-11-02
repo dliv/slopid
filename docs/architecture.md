@@ -44,7 +44,9 @@ public-library-mode contract. No Slopid trait restriction is adopted.
 4. Python adapter tests
 5. python3 scripts/check_clippy_policy.py
 
-The release workflow remains separate. [Policy tooling](../crates/policy/README.md)
+The release workflow validates exact tag/Cargo/commit identity and runs the same
+complete `just check` before its two macOS builds; packaging additionally
+checks architecture, executable version and archive content. [Policy tooling](../crates/policy/README.md)
 owns source/package check navigation; [scripts](../scripts/README.md) owns native
 compiler-control mechanics. Python 3.11+ is required. CI pins just 1.57.0.
 

@@ -34,3 +34,13 @@ working directory, exit status, and captured stdout/stderr. Each Cargo process
 has a timeout; on POSIX the script owns and terminates its process group before
 the temporary fixture directory is cleaned. The tool uses only the Python
 standard library and does not parse Rust or modify product source.
+
+## Release identity
+
+`python3 scripts/check_release.py v<version>` requires clean source, a tag
+matching the root Cargo version, and that tag's commit at HEAD. It accepts
+annotated and lightweight tags and emits release outputs only after validation.
+Its real-Git fixture tests run with the adapter tests in `just check`.
+The tag workflow runs that complete gate before either native macOS build;
+locked builds, Mach-O architecture, executable version and archive bytes are
+checked before upload. This does not itself publish or install a release.

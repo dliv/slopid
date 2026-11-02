@@ -8,14 +8,40 @@ permissions:
   contents: write
 
 jobs:
+  validation:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Validate tagged source
+        id: release
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 scripts/check_release.py "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+      - name: Install just
+        run: cargo install just --locked --version 1.57.0
+      - run: just check
+
   build:
+    needs: validation
     strategy:
       matrix:
         include:
           - target: aarch64-apple-darwin
-            os: macos-latest
+            os: macos-26
+            architecture: arm64
           - target: x86_64-apple-darwin
-            os: macos-latest
+            os: macos-15-intel
+            architecture: x86_64
 
     runs-on: ${{ matrix.os }}
 
@@ -27,14 +53,21 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} --bin sid
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin sid
 
       - name: Package
+        env:
+          VERSION: ${{ needs.validation.outputs.version }}
         run: |
+          set -euo pipefail
           NAME="sid-${{ matrix.target }}"
           mkdir -p dist
           cp target/${{ matrix.target }}/release/sid dist/$NAME
-          cd dist && tar czf $NAME.tar.gz $NAME
+          test "$(lipo -archs "dist/$NAME")" = '${{ matrix.architecture }}'
+          test "$("dist/$NAME" --version)" = "sid $VERSION"
+          (cd dist && COPYFILE_DISABLE=1 tar czf "$NAME.tar.gz" "$NAME")
+          test "$(tar -tzf "dist/$NAME.tar.gz")" = "$NAME"
+          tar -xOf "dist/$NAME.tar.gz" "$NAME" | cmp - "dist/$NAME"
 
       - name: Upload to release
         uses: softprops/action-gh-release@v3
