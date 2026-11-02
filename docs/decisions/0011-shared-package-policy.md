@@ -1,7 +1,7 @@
 # Shared package policy checks
 
 Date: 2026-11-01
-Status: Accepted locally; portable qualification pending
+Status: Accepted; published Git dependency
 
 ## Context
 
@@ -25,6 +25,7 @@ workspace lint inheritance and dependency constraints in normal `just check`.
 The runtime package still contains its recorded mixed modules. No runtime source,
 CLI behavior, version or release workflow changes. Shared package checks are not
 source-level or transitive purity proofs; declared feature checks do not prove
-resolved/default capability safety. Local Git pins remain a nonportable
-checkpoint until engine publication and independent qualification. Reconsider
+resolved/default capability safety. Git pins name the reviewed public engine revision over HTTPS; independent
+exported-checkout gates qualify dependency resolution on the current host.
+Remote CI and other platforms remain separate evidence. Reconsider
 local classifications/feature pins during the separately scoped production split.

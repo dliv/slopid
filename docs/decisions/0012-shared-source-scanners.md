@@ -1,7 +1,7 @@
 # Shared source scanners and native-policy consistency
 
 Date: 2026-11-01
-Status: Accepted locally; portable qualification pending
+Status: Accepted; published Git dependency
 
 ## Context
 
@@ -26,5 +26,6 @@ No runtime, CLI behavior, version or release change. Trait discovery is shared
 machinery; Slopid adopts no new trait restriction in this slice. Source checks
 retain bounded grammar and cannot prove transitive purity, semantic ownership
 or runtime frequency. Native config consistency supplements real compiler
-controls rather than replacing them. Engine Git pins remain machine-local
-until separately authorized publication and independent portable qualification.
+controls rather than replacing them. Engine Git pins name the reviewed public revision over HTTPS and require no
+adjacent clone. Independent exported-checkout gates qualify the current host;
+remote CI and other platforms remain separate evidence.

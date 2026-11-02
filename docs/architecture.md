@@ -130,9 +130,11 @@ and a fail-closed Cargo observation test run in the same workspace gate.
 The engine is a dev-dependency of policy only. Engine calls stay in integration
 tests; the normal policy library returns raw metadata and never imports engine
 types. The runtime package does not depend on policy or engine. Both consumers
-currently pin an immutable **local Git** revision: this checkpoint needs this
-machine's engine checkout and has no portable/remote-CI qualification yet.
-Publication and replacement with a published revision remain separate work.
+pin an immutable revision from the public
+[arch-gates repository](https://github.com/dliv/arch-gates) over HTTPS, with the
+same source/revision locked in Cargo.lock. No adjacent engine checkout or local
+override is required. Fresh exported-checkout gates qualify dependency resolution
+on the current host; remote CI and other platforms are separate evidence.
 
 Source-level external Pure dependency restrictions and Root profiles now run
 through the shared scanner, as described below. Trait acceptance has not been
@@ -191,8 +193,8 @@ all dependencies of today's mixed runtime package.
 
 Normal `just check` runs the package test alongside coverage/direction/Pure tests.
 The product runtime, version and release workflow remain unchanged. Local Git
-pins still require publication and independent portable qualification before
-consumer pushes. See ADR 0011 and the policy README.
+pins use the published immutable engine revision; consumer pushes remain
+separately authorized. See ADR 0011 and the policy README.
 
 ## Shared Root and external-source checks
 
