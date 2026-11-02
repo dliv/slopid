@@ -1,22 +1,8 @@
 use anyhow::{Context, Result};
-use serde::Serialize;
+use slop_id_identity_core::folders::{FolderIdentity, parse_identity_name};
 use std::fs;
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
-
-use crate::refcode::is_recognized_ref;
-use crate::scan::split_task_folder_name;
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub struct FolderIdentity {
-    pub id: String,
-    pub period: String,
-    pub sid_ref: String,
-    pub slug: String,
-    pub root: PathBuf,
-    pub path: PathBuf,
-}
-
 /// Take a complete, direct-child snapshot of real identity directories.
 /// Name-based reservation scans remain separate in allocation and lint.
 pub fn folder_snapshot(root: &Path) -> Result<Vec<FolderIdentity>> {
@@ -68,21 +54,6 @@ where
             .then_with(|| left.path.cmp(&right.path))
     });
     Ok(folders)
-}
-
-/// Parse the complete folder spelling. Slugs are opaque, nonempty suffixes;
-/// legacy slugless identities remain valid.
-pub(crate) fn parse_identity_name(name: &str) -> Option<(String, String, String)> {
-    let (period, sid_ref) = split_task_folder_name(name)?;
-    if !is_recognized_ref(sid_ref) {
-        return None;
-    }
-    let slug = match name.splitn(3, '_').nth(2) {
-        None => String::new(),
-        Some("") => return None,
-        Some(slug) => slug.to_string(),
-    };
-    Some((period.to_string(), sid_ref.to_string(), slug))
 }
 
 #[cfg(test)]

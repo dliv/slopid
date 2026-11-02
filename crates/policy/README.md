@@ -9,7 +9,7 @@ workspace tests/Clippy and the native compiler controls. Python 3.11+ is needed.
 
 `tests/checks/graph.rs` invokes shared coverage/direction over the full map in
 `tests/support/mod.rs`, with consumer-owned workspace/file observation and
-exact transition allowances. Root and external-reference checks in `tests/checks/source.rs` use that same
+no transition allowances. Root and external-reference checks in `tests/checks/source.rs` use that same
 map and local permissions/allowances. `tests/checks/native.rs` guards Slopid's
 method/macro/lint baseline and pairs Root environment permissions with native
 bans. File selection is local; shared scanner fixtures are tested in
@@ -24,6 +24,9 @@ on tooling.
 package dependency checks. Support uses shared metadata/manifest parsing over
 locally observed inputs, preserving unknown-member coverage and fail-closed
 reads. Production cannot depend on local policy or external engine packages,
-including aliases and dev/build declarations. Slopid's direction policy and
-mixed-root transition remain local. The engine is still a Git dev-dependency;
+including aliases and dev/build declarations. Slopid's feature/role direction and dependency lists remain local. The engine is still a Git dev-dependency;
 no shared types enter the normal observation library.
+
+The role map includes identity core/filesystem and the explicit second-root and
+disk-inspector test sources. Core is a real Pure build unit; all mixed-root and
+resolve-to-failure exceptions are removed. See [feature ownership](../identity/README.md).

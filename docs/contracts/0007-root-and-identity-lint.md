@@ -96,7 +96,7 @@ Local CLI checks prove neither external-workspace compatibility,
 installed-binary safety, release embedding, nor browser behavior.
 
 `tests/identity_cli_test.rs` covers exact channels, exits, config and selector
-precedence, and no-document-read behavior. `src/commands/folders.rs` tests
+precedence, and no-document-read behavior. `crates/identity/fs/src/folders.rs` tests
 deterministic iterator and matching-metadata failures without relying on
 filesystem permissions. The separate Slopdeck pair harness supplies assembled
 consumer and HTTP proof.

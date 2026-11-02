@@ -46,8 +46,8 @@ pub enum Command {
         terms: Vec<String>,
 
         /// Sort order
-        #[arg(long, value_enum, default_value_t = crate::commands::ListSort::Recent)]
-        sort: crate::commands::ListSort,
+        #[arg(long, value_enum, default_value_t = CliListSort::Recent)]
+        sort: CliListSort,
 
         /// Plain column output for direct human use
         #[arg(long)]
@@ -65,4 +65,18 @@ pub enum Command {
 
     /// Print AI agent usage instructions
     AgentInstructions,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum CliListSort {
+    Recent,
+    Id,
+}
+impl From<CliListSort> for slop_id_identity_core::ListSort {
+    fn from(value: CliListSort) -> Self {
+        match value {
+            CliListSort::Recent => Self::Recent,
+            CliListSort::Id => Self::Id,
+        }
+    }
 }

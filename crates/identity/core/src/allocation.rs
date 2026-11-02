@@ -1,14 +1,10 @@
-use anyhow::{Context, Result, bail};
+use crate::names::is_valid_period;
+use crate::refcode::{self, RefTail};
+use crate::slug::slugify;
+use anyhow::{Result, bail};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-
-use crate::commands::ProjectConfig;
-use crate::refcode::{self, RefTail};
-use crate::scan::{self, is_valid_period};
-use crate::slug::slugify;
 
 const CANDIDATE_BUDGET: usize = 100;
 const TAIL_SPACE_SIZE: usize = refcode::SLOP30_CHARS.len() * refcode::SLOP30_CHARS.len();
@@ -38,13 +34,13 @@ impl ScanSnapshot {
             .or_insert(seq);
     }
 
-    fn is_occupied(&self, period: &str, sid_ref: &str) -> bool {
+    pub fn is_occupied(&self, period: &str, sid_ref: &str) -> bool {
         self.occupied
             .get(period)
             .is_some_and(|refs| refs.contains(sid_ref))
     }
 
-    fn next_seq(&self, period: &str) -> Result<u16> {
+    pub fn next_seq(&self, period: &str) -> Result<u16> {
         if !is_valid_period(period) {
             return Err(anyhow::anyhow!("invalid period: {period}"));
         }
@@ -62,12 +58,12 @@ impl ScanSnapshot {
 
 #[derive(Debug)]
 pub struct NewPlan {
-    pub title: String,
-    pub slug: String,
-    pub period: String,
-    pub seq: u16,
-    pub root: PathBuf,
-    pub candidates: Vec<NewCandidate>,
+    title: String,
+    slug: String,
+    period: String,
+    seq: u16,
+    root: PathBuf,
+    candidates: Vec<NewCandidate>,
 }
 
 #[derive(Debug, Clone)]
@@ -88,56 +84,26 @@ pub struct NewResult {
     pub dry_run: bool,
 }
 
-pub fn cmd_new(
-    title: String,
-    dry_run: bool,
-    period: Option<String>,
-    config: &ProjectConfig,
-) -> Result<NewResult> {
-    let period = period.unwrap_or_else(current_period);
-    let snapshot = scan_root(&config.root)?;
-    let plan = plan_random_new(
-        title,
-        config.root.clone(),
-        period,
-        &snapshot,
-        &config.ref_prefix_policy,
-    )?;
-
-    if dry_run {
-        return Ok(plan_to_result(&plan, true));
+impl NewPlan {
+    pub fn root(&self) -> &Path {
+        &self.root
     }
-
-    execute_new(&plan)
-}
-#[expect(
-    clippy::disallowed_methods,
-    reason = "Clock input remains temporary pending composition-root ownership."
-)]
-pub(crate) fn current_period() -> String {
-    chrono::Local::now().format("%Y%m").to_string()
-}
-
-pub fn scan_root(root: &Path) -> Result<ScanSnapshot> {
-    let mut snapshot = ScanSnapshot::empty();
-    scan_root_into(&mut snapshot, root)?;
-    Ok(snapshot)
-}
-
-fn scan_root_into(snapshot: &mut ScanSnapshot, root: &Path) -> Result<()> {
-    for child in scan::scan_period_prefixed_children(root)? {
-        // Files, symlinks, and other non-directories reserve best-effort;
-        // unexpected entry shapes never fail allocation.
-        let Some(seq) = refcode::decode_seq(&child.ref_segment) else {
-            continue;
-        };
-        snapshot.record(child.period, child.ref_segment, seq);
+    pub fn period(&self) -> &str {
+        &self.period
     }
-
-    Ok(())
+    pub fn candidates(&self) -> &[NewCandidate] {
+        &self.candidates
+    }
 }
-
-pub(crate) fn plan_new<I>(
+impl ScanSnapshot {
+    /// Record a name-only observation using the same recognized-ref decoder as allocation.
+    pub fn observe(&mut self, period: String, sid_ref: String) {
+        if let Some(seq) = refcode::decode_seq(&sid_ref) {
+            self.record(period, sid_ref, seq);
+        }
+    }
+}
+pub fn plan_new<I>(
     title: String,
     root: PathBuf,
     period: String,
@@ -198,51 +164,11 @@ where
     })
 }
 
-pub(crate) fn plan_random_new(
-    title: String,
-    root: PathBuf,
-    period: String,
-    snapshot: &ScanSnapshot,
-    ref_prefix_policy: &refcode::RefPrefixPolicy,
-) -> Result<NewPlan> {
-    plan_new(
-        title,
-        root,
-        period,
-        snapshot,
-        ref_prefix_policy,
-        randomized_tail_space(),
-    )
-}
-
-pub fn execute_new(plan: &NewPlan) -> Result<NewResult> {
-    fs::create_dir_all(&plan.root)
-        .with_context(|| format!("create task root {}", plan.root.display()))?;
-
-    // v1 accepts a same-ref/different-slug race; exact path collisions retry.
-    for candidate in &plan.candidates {
-        match fs::create_dir(&candidate.path) {
-            Ok(()) => return Ok(candidate_to_result(plan, candidate, false)),
-            Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
-            Err(err) => {
-                return Err(err)
-                    .with_context(|| format!("create task folder {}", candidate.path.display()));
-            }
-        }
-    }
-
-    bail!(
-        "could not create a task folder for {} after {} attempts",
-        plan.period,
-        plan.candidates.len()
-    );
-}
-
-pub(crate) fn plan_to_result(plan: &NewPlan, dry_run: bool) -> NewResult {
+pub fn plan_to_result(plan: &NewPlan, dry_run: bool) -> NewResult {
     candidate_to_result(plan, &plan.candidates[0], dry_run)
 }
 
-fn candidate_to_result(plan: &NewPlan, candidate: &NewCandidate, dry_run: bool) -> NewResult {
+pub fn candidate_to_result(plan: &NewPlan, candidate: &NewCandidate, dry_run: bool) -> NewResult {
     debug_assert_eq!(refcode::decode_seq(&candidate.sid_ref), Some(plan.seq));
 
     NewResult {
@@ -254,21 +180,6 @@ fn candidate_to_result(plan: &NewPlan, candidate: &NewCandidate, dry_run: bool) 
         path: candidate.path.clone(),
         dry_run,
     }
-}
-
-#[expect(
-    clippy::disallowed_methods,
-    reason = "Randomness remains temporary pending composition-root ownership."
-)]
-fn randomized_tail_space() -> Vec<RefTail> {
-    let mut tails = Vec::with_capacity(TAIL_SPACE_SIZE);
-    for hi in refcode::SLOP30_CHARS {
-        for lo in refcode::SLOP30_CHARS {
-            tails.push(RefTail { hi, lo });
-        }
-    }
-    fastrand::shuffle(&mut tails);
-    tails
 }
 
 #[cfg(test)]
@@ -445,18 +356,6 @@ mod tests {
     }
 
     #[test]
-    fn randomized_tail_space_is_complete_and_without_replacement() {
-        let tails = randomized_tail_space();
-        let unique = tails
-            .iter()
-            .map(|tail| (tail.hi, tail.lo))
-            .collect::<HashSet<_>>();
-
-        assert_eq!(tails.len(), TAIL_SPACE_SIZE);
-        assert_eq!(unique.len(), tails.len());
-    }
-
-    #[test]
     fn planner_retains_at_most_the_unique_candidate_budget() {
         let policy = refcode::RefPrefixPolicy::try_from_prefixes(Vec::new()).unwrap();
         let plan = plan_new(
@@ -465,7 +364,11 @@ mod tests {
             "202605".to_string(),
             &ScanSnapshot::empty(),
             &policy,
-            randomized_tail_space(),
+            refcode::SLOP30_CHARS.into_iter().flat_map(|hi| {
+                refcode::SLOP30_CHARS
+                    .into_iter()
+                    .map(move |lo| RefTail { hi, lo })
+            }),
         )
         .unwrap();
         let unique = plan
@@ -476,147 +379,6 @@ mod tests {
 
         assert_eq!(plan.candidates.len(), CANDIDATE_BUDGET);
         assert_eq!(unique.len(), plan.candidates.len());
-    }
-
-    #[test]
-    fn scan_root_records_slugged_and_slugless_direct_child_dirs() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("stm");
-        fs::create_dir(&root).unwrap();
-        fs::create_dir(root.join("202605_sa2a2_fix-auth")).unwrap();
-        // Slugless task-shaped directories are accepted as conservative
-        // namespace reservations, even though generated ids include a slug.
-        fs::create_dir(root.join("202605_sa3a2")).unwrap();
-        fs::write(root.join("notes_202605_sa4a2"), "").unwrap();
-
-        let snapshot = scan_root(&root).unwrap();
-
-        assert!(snapshot.is_occupied("202605", "sa2a2"));
-        assert!(snapshot.is_occupied("202605", "sa3a2"));
-        assert!(!snapshot.is_occupied("202605", "sa4a2"));
-        assert_eq!(snapshot.next_seq("202605").unwrap(), 2);
-    }
-
-    #[test]
-    fn scan_root_treats_missing_root_as_empty() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("stm");
-
-        let snapshot = scan_root(&root).unwrap();
-
-        assert_eq!(
-            snapshot.next_seq("202605").unwrap(),
-            refcode::deterministic_seq_start("202605").unwrap()
-        );
-    }
-
-    #[test]
-    fn scan_root_ignores_non_task_shaped_files() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("stm");
-        fs::create_dir(&root).unwrap();
-        fs::write(root.join("README.md"), "").unwrap();
-
-        let snapshot = scan_root(&root).unwrap();
-
-        assert!(!snapshot.is_occupied("202605", "sa2a2"));
-        assert_eq!(
-            snapshot.next_seq("202605").unwrap(),
-            refcode::deterministic_seq_start("202605").unwrap()
-        );
-    }
-
-    #[test]
-    fn scan_root_ignores_period_prefixed_non_recognized_ref_files() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("stm");
-        fs::create_dir(&root).unwrap();
-        fs::write(root.join("202605_notaref_x"), "").unwrap();
-
-        let snapshot = scan_root(&root).unwrap();
-
-        assert!(!snapshot.is_occupied("202605", "notaref"));
-        assert_eq!(
-            snapshot.next_seq("202605").unwrap(),
-            refcode::deterministic_seq_start("202605").unwrap()
-        );
-    }
-
-    #[test]
-    fn scan_root_reserves_namespace_for_task_shaped_files() {
-        // Zipped task-folder exports legitimately sit next to their source
-        // folders; unexpected entry shapes reserve best-effort instead of
-        // failing allocation.
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("stm");
-        fs::create_dir(&root).unwrap();
-        fs::write(root.join("202605_sa2a2_fix-auth.zip"), "").unwrap();
-
-        let snapshot = scan_root(&root).unwrap();
-
-        assert!(snapshot.is_occupied("202605", "sa2a2"));
-        assert_eq!(snapshot.next_seq("202605").unwrap(), 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn scan_root_reserves_namespace_for_task_shaped_symlinks() {
-        use std::os::unix::fs::symlink;
-
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("stm");
-        fs::create_dir(&root).unwrap();
-        fs::create_dir(root.join("target")).unwrap();
-        symlink(root.join("target"), root.join("202605_sa2a2_link")).unwrap();
-        symlink(root.join("missing"), root.join("202605_sa3a2_dangling")).unwrap();
-
-        let snapshot = scan_root(&root).unwrap();
-
-        assert!(snapshot.is_occupied("202605", "sa2a2"));
-        assert!(snapshot.is_occupied("202605", "sa3a2"));
-        assert_eq!(snapshot.next_seq("202605").unwrap(), 2);
-    }
-
-    #[test]
-    fn scan_root_records_recognized_refs_even_when_not_generated() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("stm");
-        fs::create_dir(&root).unwrap();
-        fs::create_dir(root.join("202605_sa222_legacy")).unwrap();
-
-        assert!(refcode::is_recognized_ref("sa222"));
-        assert!(!refcode::is_generated_ref("sa222"));
-
-        let snapshot = scan_root(&root).unwrap();
-
-        assert!(snapshot.is_occupied("202605", "sa222"));
-        assert_eq!(snapshot.next_seq("202605").unwrap(), 1);
-    }
-
-    #[test]
-    fn scan_root_partitions_refs_and_max_sequence_by_period() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("stm");
-        fs::create_dir(&root).unwrap();
-        fs::create_dir(root.join("202604_szza2_exhausted-other-month")).unwrap();
-        fs::create_dir(root.join("202604_seaa2_same-ref-other-month")).unwrap();
-
-        let snapshot = scan_root(&root).unwrap();
-        let plan = plan_new(
-            "fix auth state".to_string(),
-            root,
-            "202605".to_string(),
-            &snapshot,
-            &prude_policy(),
-            [tail('a', '2')],
-        )
-        .unwrap();
-
-        assert_eq!(
-            plan.seq,
-            refcode::deterministic_seq_start("202605").unwrap()
-        );
-        assert_eq!(plan.candidates[0].sid_ref, "seaa2");
     }
 
     #[test]
@@ -855,104 +617,5 @@ mod tests {
                 .id
                 .ends_with("_follow-up-on-sa2a2-regression")
         );
-    }
-
-    #[test]
-    fn execute_new_retries_next_candidate_when_a_file_occupies_the_path() {
-        // A racing zip export (or any file) at the exact candidate path must
-        // hit the AlreadyExists retry, not a hard error.
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("stm");
-        let snapshot = ScanSnapshot::empty();
-        let plan = plan_new(
-            "fix auth state".to_string(),
-            root,
-            "202605".to_string(),
-            &snapshot,
-            &prude_policy(),
-            [tail('2', 'a'), tail('3', 'a')],
-        )
-        .unwrap();
-
-        fs::create_dir_all(&plan.root).unwrap();
-        fs::write(&plan.candidates[0].path, "zip bytes").unwrap();
-
-        let result = execute_new(&plan).unwrap();
-
-        assert_eq!(result.id, plan.candidates[1].id);
-        assert!(plan.candidates[1].path.is_dir());
-    }
-
-    #[test]
-    fn execute_new_retries_next_candidate_on_exact_path_already_exists() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("stm");
-        let snapshot = ScanSnapshot::empty();
-        let plan = plan_new(
-            "fix auth state".to_string(),
-            root,
-            "202605".to_string(),
-            &snapshot,
-            &prude_policy(),
-            [tail('2', 'a'), tail('3', 'a')],
-        )
-        .unwrap();
-
-        let second_id = plan.candidates[1].id.clone();
-        let second_path = plan.candidates[1].path.clone();
-        fs::create_dir_all(&plan.candidates[0].path).unwrap();
-
-        let result = execute_new(&plan).unwrap();
-
-        assert_eq!(result.id, second_id);
-        assert!(second_path.is_dir());
-    }
-
-    #[test]
-    fn execute_new_creates_missing_task_root_and_chosen_folder() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("stm");
-        let snapshot = ScanSnapshot::empty();
-        let plan = plan_new(
-            "fix auth state".to_string(),
-            root.clone(),
-            "202605".to_string(),
-            &snapshot,
-            &prude_policy(),
-            [tail('a', '2')],
-        )
-        .unwrap();
-
-        assert!(!root.exists());
-
-        let result = execute_new(&plan).unwrap();
-
-        assert_eq!(result.id, plan.candidates[0].id);
-        assert!(root.is_dir());
-        assert!(result.path.is_dir());
-    }
-
-    #[test]
-    fn execute_new_errors_when_all_candidate_paths_already_exist() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("stm");
-        let snapshot = ScanSnapshot::empty();
-        let plan = plan_new(
-            "fix auth state".to_string(),
-            root,
-            "202605".to_string(),
-            &snapshot,
-            &prude_policy(),
-            [tail('2', 'a'), tail('3', 'a')],
-        )
-        .unwrap();
-
-        for candidate in &plan.candidates {
-            fs::create_dir_all(&candidate.path).unwrap();
-        }
-
-        let err = execute_new(&plan).unwrap_err();
-
-        assert!(err.to_string().contains("could not create a task folder"));
     }
 }

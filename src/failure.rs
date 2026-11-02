@@ -1,6 +1,5 @@
 use serde::Serialize;
 use std::io::{self, Write};
-use std::path::PathBuf;
 
 #[derive(Debug)]
 pub enum Failure {
@@ -20,11 +19,7 @@ pub enum Failure {
     Usage(String),
 }
 
-#[derive(Clone, Debug, Serialize)]
-pub struct AmbiguousCandidate {
-    pub id: String,
-    pub path: PathBuf,
-}
+pub use slop_id_identity_core::AmbiguousCandidate;
 
 impl Failure {
     fn code(&self) -> &'static str {
@@ -130,6 +125,7 @@ pub fn write_text(value: &str) -> Result<(), Failure> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn stable_failure_codes_are_selected_by_variants() {

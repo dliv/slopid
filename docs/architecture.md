@@ -1,228 +1,132 @@
-# Current architecture and compiler gate
+# Architecture and compiler gate
 
-Date: 2026-11-01
-Status: Active for Sid 0.5.0
+Date: 2026-11-01. Sid 0.5.0 retains its CLI contracts while separating one
+folder-identity feature into build-enforced roles. [Feature entrypoint](../crates/identity/README.md),
+[app](../src/README.md), [ADR 0013](decisions/0013-identity-core-and-filesystem.md).
 
-This document owns Slopid's current compiler rules, recorded direct-use
-exceptions, enforcement classes, and the limits of the gate. The accepted
-longer-term package shape is recorded in
-[ADR 0010](decisions/0010-compiler-backed-native-architecture-gate.md); this
-gate is its first bounded step, not the completed package split.
+## Build and ownership rules
 
-## Current boundary
-
-Slopid has the `slop-id` runtime package and a test-only `slop-id-policy`
-workspace member. The `sid` CLI remains its application. `just check`
-is the local complete gate. CI calls that same recipe after installing the
-stable `rustfmt` and Clippy components, Python 3, and just 1.57.0.
-
-The recipe runs, in order:
-
-1. `cargo fmt --all -- --check`
-2. `cargo clippy --workspace --locked --all-targets -- -D warnings`
-3. `cargo test --workspace --locked`
-4. the focused Python adapter tests under `scripts/tests/`
-5. `python3 scripts/check_clippy_policy.py`
-
-Named individual recipes are available with `just --list`. The release
-workflow is separate and does not define or replace this development gate.
-
-## Native bans and recorded sites
-
-Root `clippy.toml` names direct calls to:
-
-- `std::env::{args,args_os,var,var_os,current_dir,set_current_dir}`
-- `std::time::{SystemTime::now,Instant::now}` and
-  `chrono::{Local::now,Utc::now}`
-- `fastrand::shuffle`
-- `std::process::{exit,abort,Command::new}`
-- `std::io::{stdin,stdout,stderr}`
-- `std::{print,println,eprint,eprintln,dbg}` macros
-
-`Cargo.toml` denies `clippy::disallowed_methods`,
-`clippy::disallowed_macros`, and Rust's
-`unfulfilled_lint_expectations`. The usual Clippy warning policy remains
-warnings-denied through the gate command.
-
-The production source has eight current method call sites covered by seven
-function-local `#[expect]` attributes:
-
-| File | Function | Banned item | Count |
-| --- | --- | --- | ---: |
-| `src/lib.rs` | `main_entry` | `std::process::exit` | 1 |
-| `src/lib.rs` | `current_dir` | `std::env::current_dir` | 1 |
-| `src/failure.rs` | `report_failure` | `std::io::stderr`, `std::process::exit` | 2 |
-| `src/failure.rs` | `write_json` | `std::io::stdout` | 1 |
-| `src/failure.rs` | `write_text` | `std::io::stdout` | 1 |
-| `src/commands/new.rs` | `current_period` | `chrono::Local::now` | 1 |
-| `src/commands/new.rs` | `randomized_tail_space` | `fastrand::shuffle` | 1 |
-
-`current_period` and `randomized_tail_space` keep the existing clock and random
-operations in the allocation workflow temporarily. Moving those inputs to the
-CLI composition root belongs to a later bucket. The other production
-expectations mark current CLI input, output, process exit, and working-directory
-ownership. These annotations do not authorize additional call sites.
-
-Clippy also compiles the integration-test target. Four narrowly scoped test
-expectations cover five existing test-only sites: `run_bounded` calls
-`std::process::Command::new` once, `wait_bounded` calls `std::time::Instant::now`
-twice, `make_fifo` calls `std::process::Command::new` once, and
-`recency_uses_direct_child_metadata_without_following_child_symlinks` calls
-`std::time::SystemTime::now` once. The latter two functions are `cfg(unix)`
-test support. Their function bodies and the seven production function bodies
-remain unchanged; the reasons are documented at the attributes.
-
-The checked inventory in
-[`scripts/clippy_policy_expectations.json`](../scripts/clippy_policy_expectations.json)
-keeps production, test and tooling sites in separate groups by relative file, lint code,
-canonical banned item, and count. On the supported macOS and Linux targets, it
-expects eight production method sites, five test method sites and one tooling
-method site. All macro site counts are zero. The tooling site is Cargo
-observation in `crates/policy/src/lib.rs`, narrowly expected at that function. The Unix-only test entries mean that another target needs
-its own reviewed inventory expectations before using this control.
-
-## What the gate proves
-
-| Class | Rule | Evidence |
+| Package | Role | Allowed production dependencies |
 | --- | --- | --- |
-| Gated | New direct use of a named banned method or macro fails normal all-target Clippy unless narrowly expected. | Denied Cargo lint settings plus `-D warnings` in `just clippy`. |
-| Gated | A stale method expectation fails compilation. | `unfulfilled_lint_expectations = "deny"` and the stale-expectation fixture. |
-| Gated | The named compiler lints remain enabled and the normal command still detects them. | An unexempted aliased method fixture and a `println!` fixture compile without force flags and must fail with their exact lint identities. |
-| Gated | The recorded compiled call sites remain at the expected files, identities, and counts. | Forced-warning Cargo JSON inventory, deduplicated only for identical primary span plus lint and item identity across targets. |
-| Gated | CI invokes the complete local gate. | The CI workflow runs the literal `just check`. |
-| Checkable | Each production expectation still protects the function and effect named in its reason. | Inspect the function body and the exact attribute; the inventory alone does not prove its semantic purpose. |
-| Judgment | Calls belong in the current function, and composition owns the ambient inputs. | Review the caller, function responsibility, and later composition work. |
+| slop-id | Binary/app | Identity core/filesystem and its concrete CLI, time, random and serialization libraries; never tooling or another app. |
+| slop-id-identity-core | Pure, feature identity | Own core and approved anyhow, serde derive, TOML parse with default features disabled. No filesystem/app dependency. |
+| slop-id-identity-fs | Effectful, feature identity | Own feature core and anyhow. No app/tooling or ambient time/random library dependency. |
+| slop-id-policy | Tooling | Published immutable arch-gates Git dev-dependency and local check dependencies. No production unit depends on tooling. |
 
-The Python 3.11+ adapter reads Cargo JSON compiler messages; it does not parse Rust
-source. Its focused tests cover duplicate target reports, distinct sites,
-missing and extra inventory entries, malformed JSON, unrelated compiler
-errors, and unexpected warning identities. Compile-only fixtures are generated
-in a fresh temporary directory from the repository's `Cargo.toml`, lockfile,
-and Clippy config. They do not execute fixture functions or alter tracked
-source.
+All packages inherit workspace lint settings. Each internal member is
+unpublished at 0.0.0; root remains slop-id 0.5.0 with bin sid and root version
+embedding. Member addition requires explicit classification. Path dependencies
+must remain within listed members. Cross-feature and app/tooling edges are
+rejected. Normal/build/dev declarations and ordinary aliases cannot smuggle local
+policy or external arch-gates into production. Pure declared/forwarded dependency
+features are checked; resolved feature unification remains a stated limit.
 
-## Limits
+Core owns values/plans/outcomes, config parsing, name/selector interpretation,
+filter/order/render decisions and lint interpretation. Filesystem owns business
+sequencing and operation-local I/O. App owns process inputs, period, lazy entropy,
+per-date local-time conversion, output and exit. Standard concrete callbacks
+supply the last two capabilities without custom interface hierarchies. See the
+[app dispatch contract](../src/README.md) for semantic ownership review.
 
-This gate checks only the named direct compiled calls and macros. It does not
-prove transitive purity, dependency internals, file-I/O policy, function
-ownership, runtime call frequency, business-free dispatch, or resistance to a
-deliberate bypass. A method ban cannot prove that permitted helpers have the
-right responsibility. The expected counts do not prove that an exemption's
-reason is still sound. The composition of time and randomness in
-`commands/new.rs` remains temporary debt.
+No mixed-root allowance or reverse resolve-to-failure exception remains. Candidate
+data belongs to core; its typed resolve outcomes and lint verdicts map exhaustively
+at the root. Terminal diagnostics remain coarse where no caller action changes.
+Existing public root refcode/slug/scan paths are re-export facades, not a new
+public-library-mode contract. No Slopid trait restriction is adopted.
 
-The forced-warning inventory is local evidence for the current host/target; it
-does not establish every platform. The integration-test `make_fifo` and
-recency sites are Unix-only, and current CI targets Ubuntu while the supported
-local target is macOS. There is no remote CI result until a separately
-authorized push. This gate does not claim package separation or full
-architecture adoption.
+## Normal gate
 
-## First shared Pure-source check
+`just check`, also invoked literally by CI after tool installation, runs:
 
-The policy test in `crates/policy/tests/checks/pure.rs` reads the three currently
-selected Pure files: `src/refcode.rs`, `src/slug.rs`, and
-`src/commands/agent_instructions.rs`. It passes their source to arch-gates'
-`check_pure_source`, failing on named ambient source forms. The local caller
-owns reads and file selection; missing files fail. A valid/planted control
-and a fail-closed Cargo observation test run in the same workspace gate.
+1. cargo fmt --all -- --check
+2. cargo clippy --workspace --locked --all-targets -- -D warnings
+3. cargo test --workspace --locked
+4. Python adapter tests
+5. python3 scripts/check_clippy_policy.py
 
-The engine is a dev-dependency of policy only. Engine calls stay in integration
-tests; the normal policy library returns raw metadata and never imports engine
-types. The runtime package does not depend on policy or engine. Both consumers
-pin an immutable revision from the public
-[arch-gates repository](https://github.com/dliv/arch-gates) over HTTPS, with the
-same source/revision locked in Cargo.lock. No adjacent engine checkout or local
-override is required. Fresh exported-checkout gates qualify dependency resolution
-on the current host; remote CI and other platforms are separate evidence.
+The release workflow remains separate. [Policy tooling](../crates/policy/README.md)
+owns source/package check navigation; [scripts](../scripts/README.md) owns native
+compiler-control mechanics. Python 3.11+ is required. CI pins just 1.57.0.
 
-Source-level external Pure dependency restrictions and Root profiles now run
-through the shared scanner, as described below. Trait acceptance has not been
-adopted for Slopid; Workforest's no-traits rule is not imported. Package dependency
-evaluation is described below. Source coverage and import direction are now
-covered by the shared checks described below. Pure source scans
-skip recognized test modules and do not resolve types, expand macros or inspect
-dependency internals. Fixed build inputs remain permitted. The selected files
-passing this scan do not establish transitive purity or completed package split.
-The remaining mixed modules and root-owned time/random inputs stay explicit
-follow-up work. See [policy tooling](../crates/policy/README.md).
+## Native controls and sanctioned sites
 
-## Source coverage and import direction
+Root clippy.toml bans args/args_os/var/var_os/current_dir/set_current_dir;
+SystemTime/Instant now, chrono Local/Utc now, fastrand shuffle; process exit/abort/
+Command::new; stdio stdin/stdout/stderr and print/println/eprint/eprintln/dbg.
+Cargo denies disallowed_methods/disallowed_macros and unfulfilled expectations.
+Function-local expectations name their boundary and reason. Workspace/all-target
+Clippy and forced-warning inventory cover all compiled members and the second
+root. The expected production call sites are:
 
-`crates/policy/tests/support/mod.rs` owns Slopid's full 16-file map and the
-Root/Pure/Effectful role matrix. Policy tests obtain all workspace members from
-local Cargo metadata and walk every non-policy member's `src` directory,
-including newly added product members. Missing reads/metadata are failures.
-The shared coverage evaluator rejects missing, stale, duplicate or malformed
-classification entries. Pure selection reads that same local map.
+| File/function | Banned item(s) | Count |
+| --- | --- | ---: |
+| src/lib.rs main_entry/current_dir | process::exit; env::current_dir | 2 |
+| src/failure.rs report_failure | io::stderr; process::exit | 2 |
+| src/failure.rs write_json/write_text | io::stdout | 2 |
+| src/inputs.rs current_period/randomized_tail_space | chrono::Local::now; fastrand::shuffle | 2 |
 
-Root may reference production roles; Pure references Pure; Effectful references
-Pure or Effectful. The shared direction evaluator applies this local predicate
-and exact exceptions. `commands::resolve -> failure` temporarily permits use of
-AmbiguousCandidate data colocated with root output/exit. Remove it when outcome
-types move; stale/duplicate exceptions fail. Nine named Effectful files are
-explicit temporary allowances in the mixed root package; the local test rejects
-stale or added allowances. This is not the completed package split.
+Test support retains two Command::new, two Instant::now and one SystemTime::now
+in tests/identity_cli_test.rs, including Unix-only FIFO/recency cases. Tooling has
+one Command::new in crates/policy/src/lib.rs. All macro inventories are zero.
+The exact machine-readable inventory is scripts/clippy_policy_expectations.json.
+All five compile-only controls preserve actual workspace member manifests,
+lockfile and lint context; missing members/broken resolution are not successful
+policy rejections.
 
-These checks run in the single `policy` integration test target in normal
-`just check`. The engine follows crate/self/super paths and the donor's tested
-inline-module grammar; it ignores bare child names and child edges and does not
-expand macros. Coverage proves conventional Rust-file inventory, not complete
-Rust module resolution. Import discovery cannot establish a complete semantic
-graph or absence of cycles. Native compiler gates retain their separate claims.
+## Source and package enforcement
 
-## Shared metadata and package dependencies
+The local support map classifies every conventional production Rust source and
+explicitly includes both files under identity/fs/test-support/src. The second
+root is Root and its disk inspector is Effectful; test-only placement supplies
+no automatic app exemption. Core is Pure, filesystem Effectful and root source
+Root. Missing/stale/duplicate classifications fail. Policy tooling observes
+explicit workspace metadata, including unknown members, reads sources/manifests
+locally and passes data to the shared evaluator. Failures to read/parse/spawn
+fail validation. Cargo observation stays local and inventoried; engine types and
+calls stay in integration tests.
 
-Local support reads raw Cargo metadata through the existing normal-library
-adapter and calls `arch_gates::metadata::parse_members`. Only explicit workspace
-IDs are selected; absent/duplicate IDs or malformed selected records fail.
-Support reads manifests and supplies text for shared lint-inheritance facts.
-Coverage now uses this same member model; source reads and subprocess work
-remain consumer-owned and the engine stays a policy dev-dependency.
+Root may reference production roles. Pure references Pure; Effectful references
+Pure/Effectful. Coverage/direction have no temporary exceptions. Pure source
+checks reject named effects and external references outside the local anyhow/
+serde/TOML list; unused external allowances fail. Root forbids filesystem,
+network, thread and path-query forms. Its allowed environment names are args_os,
+ArgsOs, var, var_os and current_dir; current_exe is forbidden. Callable names pair
+with the actual native ban list. Time/process/streams retain native controls.
+Native consistency also requires the local adopted method/macro/lint baseline.
 
-`tests/checks/packages.rs` classifies the current runtime package Binary and
-policy package Tooling. It retains the mixed-root transition rather than claiming
-Pure/effectful build units exist already. The shared evaluator rejects missing,
-duplicate or stale package classes, missing workspace lint inheritance, outside
-member path dependencies, and forbidden local/external Tooling targets. Production
-cannot depend on `arch-gates` under an alias or in normal/build/dev tables;
-Tooling may use it only as a dev-dependency. Slopid owns internal direction/reason
-policy; the engine does not prescribe its layout. Declared/forwarded Pure feature
-checks apply once Pure build units are classified; this does not newly restrict
-all dependencies of today's mixed runtime package.
+The shared engine is pinned over public HTTPS in policy Cargo.toml/Cargo.lock.
+No adjacent clone or path override is required. Earlier fresh exported-checkout
+qualification proves public dependency resolution on this host; a later product
+split still needs its own local proof. Engine dependency tests do not run simply
+because it is a dependency; consumer actual-source tests run in the normal gate.
 
-Normal `just check` runs the package test alongside coverage/direction/Pure tests.
-The product runtime, version and release workflow remain unchanged. Local Git
-pins use the published immutable engine revision; consumer pushes remain
-separately authorized. See ADR 0011 and the policy README.
+## Enforcement kinds and limits
 
-## Shared Root and external-source checks
+Gated: Cargo package direction, declared Pure features, member lint inheritance,
+source coverage and role direction, Pure/Root named forms and external references,
+native baseline consistency, sanctioned compiled locations/counts and five
+compiler controls. Checkable: reasons match function responsibility, dispatch is
+business-free, read/entropy/conversion ordering and callable public surfaces fit
+ownership. Judgment: feature placement and whether a new abstraction earns its cost.
 
-The local `tests/checks/source.rs` scans all four Root files selected by the
-same role map. Root forbids filesystem, network, thread, path-query and escape
-forms. Its only permitted environment names are `args_os`, `ArgsOs`, `var`,
-`var_os` and `current_dir`; namespace imports are checked at their uses.
-`current_exe` remains forbidden. Process, time and stream forms are left to the
-existing compiler controls, which continue to inventory their sanctioned sites.
-The shared engine discovers forms from supplied source; this consumer reads
-files and chooses permissions. Missing reads and empty selections fail.
+Scans target ordinary accidental drift, not malicious syntax. They follow the
+bounded crate/self/super/inline-module grammar, omit bare child and some child
+edges, skip recognized test modules and do not expand macros or resolve types.
+Coverage is conventional file inventory, not complete Rust module semantics.
+No transitive purity, cycle-freedom, dependency-internal effect or adversarial
+security claim follows. A generic ordered list key is inert data; the filesystem
+caller supplies original SystemTime ordering while app owns timezone conversion.
 
-Pure files may refer only to `anyhow` and `serde` among declared external
-normal dependencies. The source checker uses dependency names from each file's
-own package manifest, including ordinary renamed import names. Unused Pure
-allowances fail. This list is shared with local package policy; it does not
-claim dependency internals are pure or that a mixed package is a Pure build unit.
+Native inventories prove direct compiled locations/counts, not call frequency,
+resource ownership or reason quality. Root can call allowed helpers; semantic
+review still checks their responsibilities. Compiler configuration checks alone
+do not prove a lint fires. Current native inventory supports macOS/Linux; Unix
+support needs a reviewed inventory on another target. Rust is not pinned, so
+future stable lints can change warnings-denied results.
 
-`tests/checks/native.rs` parses the real Clippy and root Cargo configuration.
-It requires Slopid's adopted method/macro baseline and denied workspace lint
-levels, and pairs each permitted Root environment function with its native ban.
-It accepts stronger lint levels. The `ArgsOs` type needs no method ban. These
-are Slopid's controls, not the union of consumer bans. The existing Python
-compiler adapter, five compile-only controls and site inventory remain the
-assembled compiler proof. Configuration checks alone do not prove a lint fires.
-
-Shared Root/external/trait/token fixtures run in the engine's own suite;
-Slopid invokes its actual-source checks from normal `just check`. Trait
-discovery is available to consumers, but this slice adds no Slopid trait
-restriction. Source grammar, macro/type-resolution and transitive-purity limits
-remain as above. See ADR 0012.
+Core deterministic tests, real-resource workflows and the second caller prove
+their own seams. Production CLI tests separately prove channels/exits/effects.
+Neither snapshot navigation nor name allocation leases the filesystem. Same-ref/
+different-slug concurrency and non-transactional config init retain their stated
+limits. Consumer compatibility, installation, remote CI and another platform
+need separate evidence. No release/deployment is implied by a local gate.

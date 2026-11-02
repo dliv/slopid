@@ -111,7 +111,8 @@ just check
 
 `just check` is the complete local gate and the command CI runs. The current
 compiler rules, exceptions, and their limits are in
-[`docs/architecture.md`](docs/architecture.md). Durable behavior is documented
+[`docs/architecture.md`](docs/architecture.md). Source ownership starts at [the CLI app](src/README.md) and
+[identity feature](crates/identity/README.md). Durable behavior is documented
 in [`docs/contracts/`](docs/contracts/), and architecture decisions live in
 [`docs/decisions/`](docs/decisions/).
 

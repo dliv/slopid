@@ -1,10 +1,22 @@
 use crate::support;
 use arch_gates::packages::{CrateClass, ExternalAllowlists, check_edges};
 
-// The root is still a mixed application package. Pure/effectful build units are later work.
+// One folder-identity feature, with build-enforced pure/filesystem boundaries.
 const CRATES: &[(&str, CrateClass)] = &[
     ("slop-id", CrateClass::Binary),
     ("slop-id-policy", CrateClass::Tooling),
+    (
+        "slop-id-identity-core",
+        CrateClass::Pure {
+            feature: "identity",
+        },
+    ),
+    (
+        "slop-id-identity-fs",
+        CrateClass::Effectful {
+            feature: "identity",
+        },
+    ),
 ];
 
 fn permits(from: CrateClass, to: CrateClass) -> Result<(), &'static str> {
@@ -36,7 +48,7 @@ fn workspace_packages_follow_local_policy() {
         CRATES,
         ExternalAllowlists {
             pure: support::PURE_ALLOWED,
-            effectful: &[],
+            effectful: &["anyhow"],
             edge: &[],
         },
         &["arch-gates"],

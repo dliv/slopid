@@ -1,0 +1,19 @@
+[package]
+name = "slop-id-identity-fs"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+slop-id-identity-core = { path = "../core" }
+anyhow = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[[test]]
+name = "second_root"
+path = "test-support/src/second_root.rs"
+
+[lints]
+workspace = true

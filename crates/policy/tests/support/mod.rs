@@ -10,22 +10,41 @@ pub enum Role {
 }
 
 pub const MODULES: &[(&str, Role)] = &[
+    ("src/agent_instructions.rs", Role::Root),
     ("src/bin/sid.rs", Role::Root),
-    ("src/lib.rs", Role::Root),
     ("src/cli.rs", Role::Root),
     ("src/failure.rs", Role::Root),
-    ("src/refcode.rs", Role::Pure),
-    ("src/slug.rs", Role::Pure),
-    ("src/commands/agent_instructions.rs", Role::Pure),
-    ("src/scan.rs", Role::Effectful),
-    ("src/commands/mod.rs", Role::Effectful),
-    ("src/commands/config.rs", Role::Effectful),
-    ("src/commands/folders.rs", Role::Effectful),
-    ("src/commands/lint.rs", Role::Effectful),
-    ("src/commands/list.rs", Role::Effectful),
-    ("src/commands/new.rs", Role::Effectful),
-    ("src/commands/resolve.rs", Role::Effectful),
-    ("src/commands/root.rs", Role::Effectful),
+    ("src/inputs.rs", Role::Root),
+    ("src/lib.rs", Role::Root),
+    ("src/refcode.rs", Role::Root),
+    ("src/scan.rs", Role::Root),
+    ("src/slug.rs", Role::Root),
+    ("crates/identity/core/src/allocation.rs", Role::Pure),
+    ("crates/identity/core/src/config.rs", Role::Pure),
+    ("crates/identity/core/src/folders.rs", Role::Pure),
+    ("crates/identity/core/src/lib.rs", Role::Pure),
+    ("crates/identity/core/src/lint.rs", Role::Pure),
+    ("crates/identity/core/src/list.rs", Role::Pure),
+    ("crates/identity/core/src/names.rs", Role::Pure),
+    ("crates/identity/core/src/refcode.rs", Role::Pure),
+    ("crates/identity/core/src/resolve.rs", Role::Pure),
+    ("crates/identity/core/src/slug.rs", Role::Pure),
+    ("crates/identity/fs/src/allocation.rs", Role::Effectful),
+    ("crates/identity/fs/src/config.rs", Role::Effectful),
+    ("crates/identity/fs/src/folders.rs", Role::Effectful),
+    ("crates/identity/fs/src/lib.rs", Role::Effectful),
+    ("crates/identity/fs/src/lint.rs", Role::Effectful),
+    ("crates/identity/fs/src/list.rs", Role::Effectful),
+    ("crates/identity/fs/src/resolve.rs", Role::Effectful),
+    ("crates/identity/fs/src/scan.rs", Role::Effectful),
+    (
+        "crates/identity/fs/test-support/src/inspect.rs",
+        Role::Effectful,
+    ),
+    (
+        "crates/identity/fs/test-support/src/second_root.rs",
+        Role::Root,
+    ),
 ];
 
 pub fn root() -> std::path::PathBuf {
@@ -86,6 +105,11 @@ pub fn discovered_files() -> BTreeSet<String> {
         }
         walk(&root, &root.join(&member.dir).join("src"), &mut found);
     }
+    walk(
+        &root,
+        &root.join("crates/identity/fs/test-support/src"),
+        &mut found,
+    );
     assert!(!found.is_empty(), "no production Rust sources discovered");
     found
 }
@@ -107,4 +131,8 @@ pub fn workspace_members() -> Vec<arch_gates::metadata::Member> {
 pub const ROOT_ALLOWED_ENV: &[&str] = &["args_os", "ArgsOs", "var", "var_os", "current_dir"];
 
 // Current selected Pure modules need only these external dependencies.
-pub const PURE_ALLOWED: &[(&str, &[&str])] = &[("anyhow", &[]), ("serde", &["derive"])];
+pub const PURE_ALLOWED: &[(&str, &[&str])] = &[
+    ("anyhow", &[]),
+    ("serde", &["derive"]),
+    ("toml", &["parse"]),
+];

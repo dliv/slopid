@@ -1,7 +1,10 @@
 #![warn(clippy::all)]
 
+mod agent_instructions;
 mod cli;
-mod commands;
+mod inputs;
+use slop_id_identity_core::{LintVerdict, render_human, render_root_human};
+use slop_id_identity_fs as commands;
 mod failure;
 pub mod refcode;
 pub mod scan;
@@ -9,8 +12,8 @@ pub mod slug;
 
 use clap::{Parser, error::ErrorKind};
 use cli::{Cli, Command};
-use commands::ResolveError;
 use failure::{AmbiguousCandidate, Failure, report_failure, write_json, write_text};
+use slop_id_identity_core::ResolveError;
 
 #[expect(
     clippy::disallowed_methods,
@@ -51,7 +54,7 @@ fn run(cli: Cli) -> Result<i32, Failure> {
             let cwd = current_dir()?;
             let result = commands::cmd_root(&cwd).map_err(Failure::Config)?;
             if human {
-                write_text(&commands::render_root_human(&result))?;
+                write_text(&render_root_human(&result))?;
             } else {
                 write_json(&result)?;
             }
@@ -63,16 +66,23 @@ fn run(cli: Cli) -> Result<i32, Failure> {
         } => {
             let cwd = current_dir()?;
             let config = commands::load_project_config(&cwd).map_err(Failure::Config)?;
-            let result =
-                commands::cmd_new(title, dry_run, period, &config).map_err(Failure::New)?;
+            let result = commands::cmd_new(
+                title,
+                dry_run,
+                period.unwrap_or_else(inputs::current_period),
+                &config,
+                inputs::randomized_tail_space,
+            )
+            .map_err(Failure::New)?;
             write_json(&result)?;
         }
         Command::List { terms, sort, human } => {
             let cwd = current_dir()?;
             let config = commands::load_project_config(&cwd).map_err(Failure::Config)?;
-            let result = commands::cmd_list(terms, sort, &config).map_err(Failure::List)?;
+            let result = commands::cmd_list(terms, sort.into(), &config, inputs::local_timestamp)
+                .map_err(Failure::List)?;
             if human {
-                write_text(&commands::render_human(&result))?;
+                write_text(&render_human(&result))?;
             } else {
                 write_json(&result)?;
             }
@@ -87,11 +97,15 @@ fn run(cli: Cli) -> Result<i32, Failure> {
             let cwd = current_dir()?;
             let config = commands::load_project_config(&cwd).map_err(Failure::Config)?;
             let execution = commands::cmd_lint(&config);
-            write_json(&execution.report)?;
-            return Ok(execution.exit_code);
+            write_json(&execution)?;
+            return Ok(match execution.verdict() {
+                LintVerdict::Healthy => 0,
+                LintVerdict::Unhealthy => 1,
+                LintVerdict::Incomplete => 2,
+            });
         }
         Command::AgentInstructions => {
-            write_json(&commands::agent_instructions())?;
+            write_json(&agent_instructions::agent_instructions())?;
         }
     }
 

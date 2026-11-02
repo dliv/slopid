@@ -23,6 +23,13 @@ Separate test-contract work from implementation work when running TDD
 experiments. A branch can be successful at making a strong test suite pass while
 still needing follow-up for non-test plan items such as docs, ADRs, or cleanup.
 
+## Source routing
+
+Before moving code, read [identity ownership](crates/identity/README.md) and
+[the app dispatch contract](src/README.md). [Tests](tests/README.md) distinguish
+production CLI proof from the filesystem second root. Architecture owns rules;
+local READMEs route to responsibilities and evidence.
+
 ## Planning Notes
 
 `stm/` is short-term memory for active feature work. It is appropriate to collect

@@ -5,8 +5,8 @@
     {"file": "src/failure.rs", "lint": "clippy::disallowed_methods", "item": "std::io::stderr", "count": 1},
     {"file": "src/failure.rs", "lint": "clippy::disallowed_methods", "item": "std::process::exit", "count": 1},
     {"file": "src/failure.rs", "lint": "clippy::disallowed_methods", "item": "std::io::stdout", "count": 2},
-    {"file": "src/commands/new.rs", "lint": "clippy::disallowed_methods", "item": "chrono::Local::now", "count": 1},
-    {"file": "src/commands/new.rs", "lint": "clippy::disallowed_methods", "item": "fastrand::shuffle", "count": 1}
+    {"file": "src/inputs.rs", "lint": "clippy::disallowed_methods", "item": "chrono::Local::now", "count": 1},
+    {"file": "src/inputs.rs", "lint": "clippy::disallowed_methods", "item": "fastrand::shuffle", "count": 1}
   ],
   "test_sites": [
     {"file": "tests/identity_cli_test.rs", "lint": "clippy::disallowed_methods", "item": "std::process::Command::new", "count": 2},

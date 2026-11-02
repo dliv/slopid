@@ -18,6 +18,7 @@ boundary. The current CLI contracts are in `docs/contracts/`.
 - [10. Compiler-Backed Native Architecture Gate](0010-compiler-backed-native-architecture-gate.md)
 - [11. Shared Package Policy Checks](0011-shared-package-policy.md)
 - [12. Shared Source Scanners and Native-Policy Consistency](0012-shared-source-scanners.md)
+- [13. Identity Core, Filesystem Workflows and CLI Composition](0013-identity-core-and-filesystem.md)
 
 ADRs 0007 and 0008 describe the retired document-reader and workflow-mutation
 surfaces. Their implementation and active instructions were removed for the

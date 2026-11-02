@@ -1,11 +1,12 @@
-use std::path::Path;
-
-use serde::Serialize;
-
-use crate::commands::folders::{FolderIdentity, folder_snapshot, parse_identity_name};
-use crate::failure::AmbiguousCandidate;
+use crate::folders::{FolderIdentity, parse_identity_name};
 use crate::refcode::is_recognized_ref;
-
+use serde::Serialize;
+use std::path::PathBuf;
+#[derive(Clone, Debug, Serialize)]
+pub struct AmbiguousCandidate {
+    pub id: String,
+    pub path: PathBuf,
+}
 #[derive(Debug)]
 pub enum ResolveError {
     Invalid(String),
@@ -23,18 +24,16 @@ pub struct ResolveResult {
 }
 
 #[derive(Debug)]
-enum Selector {
+pub enum Selector {
     Ref(String),
     FolderName(String),
 }
 
-pub fn cmd_resolve(selector: &str, root: &Path) -> Result<ResolveResult, ResolveError> {
-    let selector_kind = parse_selector(selector).ok_or_else(|| {
-        ResolveError::Invalid(format!(
-            "selector must be an exact recognized ref or complete identity folder name: {selector:?}"
-        ))
-    })?;
-    let folders = folder_snapshot(root).map_err(ResolveError::Unavailable)?;
+pub fn resolve_matches(
+    selector: &str,
+    selector_kind: Selector,
+    folders: Vec<FolderIdentity>,
+) -> Result<ResolveResult, ResolveError> {
     let matches = folders
         .into_iter()
         .filter(|folder| match &selector_kind {
@@ -66,7 +65,7 @@ pub fn cmd_resolve(selector: &str, root: &Path) -> Result<ResolveResult, Resolve
     }
 }
 
-fn parse_selector(selector: &str) -> Option<Selector> {
+pub fn parse_selector(selector: &str) -> Option<Selector> {
     if selector.bytes().any(|byte| matches!(byte, b'/' | b'\\')) {
         return None;
     }

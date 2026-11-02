@@ -1,22 +1,8 @@
-//! Folder-identity lint over the configured allocation namespace.
-//!
-//! Slopid owns immutable folder identity; task-memory meaning above those
-//! folders belongs to Slopdeck. This command therefore inspects direct-child
-//! *names* only. It never opens `CURRENT_STATE.md`, an inbox message, a
-//! capture note, a topic document, or any other authored byte, and it never
-//! follows or stats an entry — a matching file or symlink is a valid ref
-//! reservation because allocation must not reuse its ref.
-
-use crate::commands::config::ProjectConfig;
-use crate::refcode::is_recognized_ref;
-use crate::scan::split_task_folder_name;
+use crate::{names::split_task_folder_name, refcode::is_recognized_ref};
 use serde::Serialize;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
@@ -57,11 +43,6 @@ pub struct SidLintReport {
     pub findings: Vec<SidIdentityFinding>,
 }
 
-pub struct LintExecution {
-    pub report: SidLintReport,
-    pub exit_code: i32,
-}
-
 impl SidIdentityFindingCode {
     fn as_str(self) -> &'static str {
         match self {
@@ -82,56 +63,27 @@ impl SidIdentityFindingCode {
     }
 }
 
-pub fn cmd_lint(config: &ProjectConfig) -> LintExecution {
-    let report = scan_identity(config);
-    let exit_code = exit_code(&report);
-    LintExecution { report, exit_code }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LintVerdict {
+    Healthy,
+    Unhealthy,
+    Incomplete,
 }
-
-/// Incomplete coverage outranks an unhealthy verdict: an agent that cannot see
-/// the whole namespace must not act on a partial "unhealthy" answer as if the
-/// scan were authoritative. Warnings alone stay successful.
-fn exit_code(report: &SidLintReport) -> i32 {
-    if !report.complete {
-        2
-    } else if !report.healthy {
-        1
-    } else {
-        0
+impl SidLintReport {
+    pub fn verdict(&self) -> LintVerdict {
+        if !self.complete {
+            LintVerdict::Incomplete
+        } else if !self.healthy {
+            LintVerdict::Unhealthy
+        } else {
+            LintVerdict::Healthy
+        }
     }
 }
-
-fn scan_identity(config: &ProjectConfig) -> SidLintReport {
-    let mut findings = Vec::new();
-    let mut reservations: BTreeMap<String, BTreeSet<PathBuf>> = BTreeMap::new();
-
-    for root in [&config.root] {
-        let relative_root = relative_to_base(&config.base, root);
-        let entries = match fs::read_dir(root) {
-            Ok(entries) => entries,
-            // A configured root that does not exist yet reserves nothing.
-            // Allocation creates it on demand, so absence is an empty
-            // namespace rather than a defect.
-            Err(error) if error.kind() == ErrorKind::NotFound => continue,
-            Err(error) => {
-                findings.push(SidIdentityFinding {
-                    code: SidIdentityFindingCode::RootUnreadable,
-                    severity: Severity::Error,
-                    message: format!("cannot read configured allocation root: {error}"),
-                    ref_id: None,
-                    path: Some(relative_root),
-                });
-                continue;
-            }
-        };
-        scan_root_entries(
-            &relative_root,
-            entries.map(|entry| entry.map(|entry| entry.file_name().to_str().map(str::to_owned))),
-            &mut reservations,
-            &mut findings,
-        );
-    }
-
+pub fn finish_report(
+    mut findings: Vec<SidIdentityFinding>,
+    reservations: BTreeMap<String, BTreeSet<PathBuf>>,
+) -> SidLintReport {
     for (sid_ref, locators) in reservations {
         if locators.len() < 2 {
             continue;
@@ -163,7 +115,7 @@ fn scan_identity(config: &ProjectConfig) -> SidLintReport {
 /// Classify one root's direct children. Entry names arrive through an iterator
 /// rather than `fs::ReadDir` so a mid-iteration failure is a deterministic test
 /// seam instead of a racy filesystem trick.
-fn scan_root_entries<I>(
+pub fn scan_root_entries<I>(
     relative_root: &Path,
     entries: I,
     reservations: &mut BTreeMap<String, BTreeSet<PathBuf>>,
@@ -217,7 +169,7 @@ fn scan_root_entries<I>(
 /// carries an expanded private path. Configured roots are always
 /// `base.join(<validated relative path>)`, so the strip cannot fail; the
 /// fallback keeps an unexpected path out of the report instead of leaking it.
-fn relative_to_base(base: &Path, path: &Path) -> PathBuf {
+pub fn relative_to_base(base: &Path, path: &Path) -> PathBuf {
     path.strip_prefix(base)
         .map(Path::to_path_buf)
         .unwrap_or_else(|_| PathBuf::from(path.file_name().unwrap_or_default()))
@@ -244,6 +196,10 @@ mod tests {
     use super::*;
     use std::io;
 
+    fn verdict(report: &SidLintReport) -> LintVerdict {
+        report.verdict()
+    }
+
     fn finding(code: SidIdentityFindingCode, severity: Severity) -> SidIdentityFinding {
         SidIdentityFinding {
             code,
@@ -266,37 +222,37 @@ mod tests {
 
     #[test]
     fn exit_code_covers_both_sides_of_every_status_boundary() {
-        assert_eq!(exit_code(&report(vec![])), 0);
+        assert_eq!(verdict(&report(vec![])), LintVerdict::Healthy);
         // Warning-only stays successful: no version-1 identity code is a
         // warning yet, so this boundary is proven against the contract itself.
         assert_eq!(
-            exit_code(&report(vec![finding(
+            verdict(&report(vec![finding(
                 SidIdentityFindingCode::RefDuplicate,
                 Severity::Warning
             )])),
-            0
+            LintVerdict::Healthy
         );
         assert_eq!(
-            exit_code(&report(vec![finding(
+            verdict(&report(vec![finding(
                 SidIdentityFindingCode::RefDuplicate,
                 Severity::Error
             )])),
-            1
+            LintVerdict::Unhealthy
         );
         assert_eq!(
-            exit_code(&report(vec![finding(
+            verdict(&report(vec![finding(
                 SidIdentityFindingCode::RootUnreadable,
                 Severity::Error
             )])),
-            2
+            LintVerdict::Incomplete
         );
         // Incomplete coverage outranks an unhealthy complete verdict.
         assert_eq!(
-            exit_code(&report(vec![
+            verdict(&report(vec![
                 finding(SidIdentityFindingCode::FolderRefInvalid, Severity::Error),
                 finding(SidIdentityFindingCode::EntryUnreadable, Severity::Error),
             ])),
-            2
+            LintVerdict::Incomplete
         );
     }
 
