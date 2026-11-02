@@ -14,6 +14,46 @@ fn run(dir: &Path, args: &[&str]) -> Output {
     sid().args(args).current_dir(dir).output().unwrap()
 }
 
+#[cfg(unix)]
+#[test]
+fn list_formats_each_timestamp_with_its_date_specific_local_offset() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path().join("stm");
+    let winter = create_folder(&root, "202610_sa2a7_winter");
+    let summer = create_folder(&root, "202610_sa3a7_summer");
+    fs::File::open(&winter)
+        .unwrap()
+        .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_704_067_200))
+        .unwrap();
+    fs::File::open(&summer)
+        .unwrap()
+        .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_719_792_000))
+        .unwrap();
+
+    for (zone, expected) in [
+        (
+            "UTC",
+            ["2024-01-01T00:00:00+00:00", "2024-07-01T00:00:00+00:00"],
+        ),
+        (
+            "America/New_York",
+            ["2023-12-31T19:00:00-05:00", "2024-06-30T20:00:00-04:00"],
+        ),
+    ] {
+        let output = sid()
+            .args(["list", "--sort", "id"])
+            .env("TZ", zone)
+            .current_dir(workspace.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+        let result = json(&output.stdout);
+        assert_eq!(result["folders"][0]["modified"], expected[0]);
+        assert_eq!(result["folders"][1]["modified"], expected[1]);
+    }
+}
+
 #[expect(
     clippy::disallowed_methods,
     reason = "The CLI subprocess is the subject of this integration test."
