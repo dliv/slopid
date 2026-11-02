@@ -6,7 +6,7 @@ publish = false
 
 [dev-dependencies]
 toml = "0.8"
-arch-gates = { git = "https://github.com/dliv/arch-gates.git", rev = "34b33664e227c99376ae03b3ff628da00618a507" }
+arch-gates = { git = "https://github.com/dliv/arch-gates.git", rev = "e0c680955d8eabe40c6cbf006eb30202511890a5" }
 
 [lints]
 workspace = true
