@@ -79,7 +79,12 @@ The local support map classifies every conventional production Rust source and
 explicitly includes both files under identity/fs/test-support/src. The second
 root is Root and its disk inspector is Effectful; test-only placement supplies
 no automatic app exemption. Core is Pure, filesystem Effectful and root source
-Root. Missing/stale/duplicate classifications fail. Policy tooling observes
+Root. Missing/stale/duplicate classifications fail. Source roles must also match the
+actual owning workspace package class from the same local package table used
+for dependency checks: Pure -> Pure, Effectful -> Effectful, Binary -> Root.
+Only the two exact named test-support sources have explicit target roles;
+unknown owners and missing/duplicate proof-role entries fail. Relabeling a
+Pure-package file Effectful cannot remove its profile obligation. Policy tooling observes
 explicit workspace metadata, including unknown members, reads sources/manifests
 locally and passes data to the shared evaluator. Failures to read/parse/spawn
 fail validation. Cargo observation stays local and inventoried; engine types and

@@ -30,3 +30,8 @@ no shared types enter the normal observation library.
 The role map includes identity core/filesystem and the explicit second-root and
 disk-inspector test sources. Core is a real Pure build unit; all mixed-root and
 resolve-to-failure exceptions are removed. See [feature ownership](../identity/README.md).
+
+Source roles are checked against the actual owning member and the single local
+package-class table. Exact named proof-source roles are validated for presence,
+uniqueness and ownership. A source-map edit cannot quietly exempt a Pure-package
+file from purity; normal policy regressions cover this agreement.

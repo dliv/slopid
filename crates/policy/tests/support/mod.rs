@@ -1,4 +1,5 @@
 use arch_gates::graph::{Edge, module_id};
+use arch_gates::packages::CrateClass;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -136,3 +137,110 @@ pub const PURE_ALLOWED: &[(&str, &[&str])] = &[
     ("serde", &["derive"]),
     ("toml", &["parse"]),
 ];
+
+// One folder-identity feature, with build-enforced pure/filesystem boundaries.
+pub const CRATES: &[(&str, CrateClass)] = &[
+    ("slop-id", CrateClass::Binary),
+    ("slop-id-policy", CrateClass::Tooling),
+    (
+        "slop-id-identity-core",
+        CrateClass::Pure {
+            feature: "identity",
+        },
+    ),
+    (
+        "slop-id-identity-fs",
+        CrateClass::Effectful {
+            feature: "identity",
+        },
+    ),
+];
+
+pub const PROOF_MODULES: &[(&str, Role)] = &[
+    (
+        "crates/identity/fs/test-support/src/second_root.rs",
+        Role::Root,
+    ),
+    (
+        "crates/identity/fs/test-support/src/inspect.rs",
+        Role::Effectful,
+    ),
+];
+
+/// Bind source profiles to actual workspace ownership, with exact test-target roles.
+pub fn source_role_violations(
+    members: &[arch_gates::metadata::Member],
+    modules: &[(&str, Role)],
+    proof: &[(&str, Role)],
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    let mut seen = BTreeSet::new();
+    for (file, _) in proof {
+        if !seen.insert(*file) {
+            problems.push(format!("duplicate proof source role: {file}"));
+        }
+        if modules.iter().filter(|(source, _)| source == file).count() != 1 {
+            problems.push(format!(
+                "missing proof source or duplicate classification: {file}"
+            ));
+        }
+    }
+    for (file, actual) in modules {
+        let Some(id) = module_id(file) else {
+            problems.push(format!("invalid source path: {file}"));
+            continue;
+        };
+        let exception = proof.iter().find(|(source, _)| source == file);
+        let owner_dir = if exception.is_some() {
+            // Only this package's named test-support target is a second root.
+            let Some(owner) = id.crate_dir.strip_suffix("/test-support") else {
+                problems.push(format!(
+                    "proof source is not in a named test-support target: {file}"
+                ));
+                continue;
+            };
+            owner
+        } else {
+            &id.crate_dir
+        };
+        let Some(owner) = members.iter().find(|member| member.dir == owner_dir) else {
+            problems.push(format!("source has no workspace owner: {file}"));
+            continue;
+        };
+        let Some((_, class)) = CRATES.iter().find(|(name, _)| *name == owner.name) else {
+            problems.push(format!(
+                "source owner has no package class: {file}: {}",
+                owner.name
+            ));
+            continue;
+        };
+        let required = if let Some((_, role)) = exception {
+            if owner.name != "slop-id-identity-fs" || !matches!(class, CrateClass::Effectful { .. })
+            {
+                problems.push(format!(
+                    "proof source has an unsupported owner: {file}: {}",
+                    owner.name
+                ));
+                continue;
+            }
+            *role
+        } else {
+            match class {
+                CrateClass::Pure { .. } => Role::Pure,
+                CrateClass::Effectful { .. } => Role::Effectful,
+                CrateClass::Binary => Role::Root,
+                CrateClass::Edge | CrateClass::Tooling => {
+                    problems.push(format!(
+                        "unsupported production source owner: {file}: {}",
+                        owner.name
+                    ));
+                    continue;
+                }
+            }
+        };
+        if *actual != required {
+            problems.push(format!("source/package role mismatch: {file} is {actual:?}, package {} requires {required:?}", owner.name));
+        }
+    }
+    problems
+}

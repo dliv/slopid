@@ -13,14 +13,71 @@ fn every_source_file_has_exactly_one_class() {
 }
 
 #[test]
-fn production_packages_have_no_mixed_root_allowances() {
-    assert!(
-        MODULES
-            .iter()
-            .all(|(file, role)| !file.starts_with("src/") || *role == Role::Root)
+fn production_source_roles_match_owning_packages() {
+    let problems = support::source_role_violations(
+        &support::workspace_members(),
+        MODULES,
+        support::PROOF_MODULES,
     );
-    assert!(MODULES.iter().any(|(_, role)| *role == Role::Pure));
-    assert!(MODULES.iter().any(|(_, role)| *role == Role::Effectful));
+    assert!(
+        problems.is_empty(),
+        "source/package role violations: {problems:?}"
+    );
+}
+
+#[test]
+fn reclassifying_production_cannot_disable_its_package_profile() {
+    let members = support::workspace_members();
+    for (file, wrong_role) in [
+        ("crates/identity/core/src/lib.rs", Role::Effectful),
+        ("crates/identity/fs/src/lib.rs", Role::Root),
+        ("src/lib.rs", Role::Pure),
+    ] {
+        let changed: Vec<_> = MODULES
+            .iter()
+            .map(|(path, role)| (*path, if *path == file { wrong_role } else { *role }))
+            .collect();
+        let problems = support::source_role_violations(&members, &changed, support::PROOF_MODULES);
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("role mismatch") && p.contains(file)),
+            "classification must not escape package profile: {file}: {problems:?}"
+        );
+    }
+}
+
+#[test]
+fn proof_role_exceptions_are_exact_and_nonstale() {
+    let members = support::workspace_members();
+    let without_proof: Vec<_> = MODULES
+        .iter()
+        .copied()
+        .filter(|(file, _)| {
+            !support::PROOF_MODULES
+                .iter()
+                .any(|(proof, _)| proof == file)
+        })
+        .collect();
+    assert!(
+        support::source_role_violations(&members, &without_proof, support::PROOF_MODULES)
+            .iter()
+            .any(|p| p.contains("missing proof"))
+    );
+    let mut duplicated = support::PROOF_MODULES.to_vec();
+    duplicated.push(support::PROOF_MODULES[0]);
+    assert!(
+        support::source_role_violations(&members, MODULES, &duplicated)
+            .iter()
+            .any(|p| p.contains("duplicate proof"))
+    );
+    let mut unknown = MODULES.to_vec();
+    unknown.push(("crates/not-a-member/src/lib.rs", Role::Pure));
+    assert!(
+        support::source_role_violations(&members, &unknown, support::PROOF_MODULES)
+            .iter()
+            .any(|p| p.contains("no workspace owner"))
+    );
 }
 
 #[test]
