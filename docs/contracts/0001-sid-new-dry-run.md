@@ -1,8 +1,8 @@
 # Contract 0001 — identity allocation
 
 Date: 2026-05-31
-Updated: 2026-10-26
-Status: Active for Sid 0.5.0
+Updated: 2026-11-05
+Status: Active
 
 ## Purpose
 
@@ -45,8 +45,10 @@ deny_prefixes = ["sex", "shat"]
 Allocation and lint scan the names of every direct child under the one root.
 They do not stat entries or read authored content. Hidden and non-period names
 are ignored. A six-ASCII-digit period followed by a recognized ref reserves
-that ref regardless of whether the child is a directory, file, or symlink.
-Invalid refs do not reserve allocation refs; lint still reports them.
+that ref across the whole identity root, regardless of the child's period,
+slug, or kind (directory, file, or symlink). Invalid refs do not reserve
+allocation refs; lint still reports them. Released Sid 0.5.0 incorrectly
+limited the reservation check to the selected period.
 
 The sequence is partitioned by period. Periods are exactly six ASCII digits;
 calendar validity is deferred. Ref recognition remains broader than ref
@@ -58,9 +60,10 @@ The planner starts at the next unoccupied sequence, advances past sequences
 with no policy-allowed ref, and stops after sequence 659. It shuffles the
 complete 30-by-30 tail space without replacement and retains at most 100
 viable unoccupied candidate paths. Invalid and denied tails do not consume that
-budget. The executor creates the root as needed, then uses exact-path
-no-clobber directory creation and retries `AlreadyExists` against the next
-candidate. Same-ref/different-slug concurrent allocation remains an accepted
+budget. If no viable ref remains in that sequence after root-wide filtering,
+allocation fails before writing. The executor creates the root as needed,
+then uses exact-path no-clobber directory creation and retries `AlreadyExists`
+against the next candidate. Same-ref/different-slug concurrent allocation remains an accepted
 best-effort race; no global lock or lease is provided.
 
 `--dry-run` returns the same allocation plan without creating the root or
@@ -79,8 +82,9 @@ result use the structured stderr envelope and code set in
 ## Test matrix
 
 Tests cover the six-digit boundary and non-calendar values; recognized versus
-generated refs; period partitions; omitted/replaced/empty/invalid prefix
-policies; denied-prefix reachability; 659 success and 660 exhaustion; the 100
+generated refs; per-period sequence selection and root-wide reservations;
+occupied tail space with one or zero available refs; omitted/replaced/empty/invalid
+prefix policies; denied-prefix reachability; 659 success and 660 exhaustion; the 100
 candidate budget; randomized exhaustive tails; slug length and empty-slug
 boundaries; name-only file and symlink reservations; missing, real, and
 symlinked roots; dangling-root creation failure; no-write dry-run; and exact

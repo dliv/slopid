@@ -11,33 +11,29 @@ const TAIL_SPACE_SIZE: usize = refcode::SLOP30_CHARS.len() * refcode::SLOP30_CHA
 
 #[derive(Debug)]
 pub struct ScanSnapshot {
-    occupied: HashMap<String, HashSet<String>>,
-    max_seq: HashMap<String, u16>,
+    occupied_refs: HashSet<String>,
+    max_seq_by_period: HashMap<String, u16>,
 }
 
 impl ScanSnapshot {
     pub fn empty() -> Self {
         Self {
-            occupied: HashMap::new(),
-            max_seq: HashMap::new(),
+            occupied_refs: HashSet::new(),
+            max_seq_by_period: HashMap::new(),
         }
     }
 
     fn record(&mut self, period: String, sid_ref: String, seq: u16) {
-        self.occupied
-            .entry(period.clone())
-            .or_default()
-            .insert(sid_ref);
-        self.max_seq
+        self.occupied_refs.insert(sid_ref);
+        self.max_seq_by_period
             .entry(period)
             .and_modify(|max| *max = (*max).max(seq))
             .or_insert(seq);
     }
 
-    pub fn is_occupied(&self, period: &str, sid_ref: &str) -> bool {
-        self.occupied
-            .get(period)
-            .is_some_and(|refs| refs.contains(sid_ref))
+    /// Short refs are reserved by names anywhere in the scanned identity root.
+    pub fn is_occupied(&self, sid_ref: &str) -> bool {
+        self.occupied_refs.contains(sid_ref)
     }
 
     pub fn next_seq(&self, period: &str) -> Result<u16> {
@@ -45,7 +41,7 @@ impl ScanSnapshot {
             return Err(anyhow::anyhow!("invalid period: {period}"));
         }
 
-        match self.max_seq.get(period) {
+        match self.max_seq_by_period.get(period) {
             Some(max) => max
                 .checked_add(1)
                 .filter(|seq| *seq <= refcode::MAX_SEQ)
@@ -135,7 +131,7 @@ where
         if ref_prefix_policy.denies(&sid_ref) {
             continue;
         }
-        if snapshot.is_occupied(&period, &sid_ref) {
+        if snapshot.is_occupied(&sid_ref) {
             continue;
         }
 
@@ -194,19 +190,10 @@ mod tests {
         refcode::RefPrefixPolicy::prude()
     }
 
-    fn planner_snapshot_with_occupied_ref_only(period: &str, sid_ref: &str) -> ScanSnapshot {
-        // This fixture intentionally omits max_seq so the planner must handle an
-        // occupied ref in the same sequence it is currently trying to allocate.
-        let mut refs = HashSet::new();
-        refs.insert(sid_ref.to_string());
-
-        let mut occupied = HashMap::new();
-        occupied.insert(period.to_string(), refs);
-
-        ScanSnapshot {
-            occupied,
-            max_seq: HashMap::new(),
-        }
+    fn snapshot_with_prior_period_ref(sid_ref: &str) -> ScanSnapshot {
+        let mut snapshot = ScanSnapshot::empty();
+        snapshot.observe("202604".to_string(), sid_ref.to_string());
+        snapshot
     }
 
     #[test]
@@ -299,8 +286,8 @@ mod tests {
             let mut max_seq = HashMap::new();
             max_seq.insert(period.to_string(), seq - 1);
             let snapshot = ScanSnapshot {
-                occupied: HashMap::new(),
-                max_seq,
+                occupied_refs: HashSet::new(),
+                max_seq_by_period: max_seq,
             };
             let reserved_tail_hi = reserved.chars().nth(3).unwrap();
 
@@ -512,7 +499,7 @@ mod tests {
         let seq = refcode::deterministic_seq_start(period).unwrap();
         let occupied_ref = refcode::encode_ref(seq, tail('2', 'a')).unwrap();
         let next_ref = refcode::encode_ref(seq, tail('3', 'a')).unwrap();
-        let snapshot = planner_snapshot_with_occupied_ref_only(period, &occupied_ref);
+        let snapshot = snapshot_with_prior_period_ref(&occupied_ref);
 
         let plan = plan_new(
             "new slug for same ref".to_string(),
@@ -538,7 +525,7 @@ mod tests {
         let period = "202605";
         let seq = refcode::deterministic_seq_start(period).unwrap();
         let occupied_ref = refcode::encode_ref(seq, tail('2', 'a')).unwrap();
-        let snapshot = planner_snapshot_with_occupied_ref_only(period, &occupied_ref);
+        let snapshot = snapshot_with_prior_period_ref(&occupied_ref);
 
         let err = plan_new(
             "new slug for same ref".to_string(),
@@ -564,8 +551,8 @@ mod tests {
         let mut max_seq = HashMap::new();
         max_seq.insert("2026_05".to_string(), 0);
         let snapshot = ScanSnapshot {
-            occupied: HashMap::new(),
-            max_seq,
+            occupied_refs: HashSet::new(),
+            max_seq_by_period: max_seq,
         };
 
         let err = plan_new(

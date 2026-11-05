@@ -363,6 +363,64 @@ fn new_preserves_its_exact_result_and_dry_run_has_no_write() {
 }
 
 #[test]
+fn allocation_keeps_cross_month_reservations_in_the_root_namespace() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("stm");
+    fs::create_dir(&root).unwrap();
+    // May 2026 starts at sea. Reserve its entire recognized tail space across
+    // other periods, including names that cannot be selected by navigation.
+    let alphabet = "23456789abcdefghjkmnpqrtuvwxyz";
+    for hi in alphabet.chars() {
+        for lo in alphabet.chars() {
+            let period = if hi == 'a' { "202604" } else { "202606" };
+            let path = root.join(format!("{period}_sea{hi}{lo}_reservation"));
+            #[cfg(unix)]
+            if lo == '3' {
+                std::os::unix::fs::symlink("missing", &path).unwrap();
+                continue;
+            }
+            if lo == '2' {
+                fs::write(path, "reserved").unwrap();
+            } else {
+                fs::create_dir(path).unwrap();
+            }
+        }
+    }
+    let before = run(tmp.path(), &["lint"]);
+    assert!(before.status.success());
+    assert_eq!(json(&before.stdout)["healthy"], true);
+
+    let args = ["new", "May task", "--period", "202605"];
+    assert_error(&run(tmp.path(), &args), "sid-new", 1);
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 900);
+
+    // With exactly one generated ref freed, both preview and creation must
+    // select it, irrespective of the shuffled tail order.
+    fs::remove_file(root.join("202604_seaa2_reservation")).unwrap();
+    let dry = run(
+        tmp.path(),
+        &["new", "May task", "--period", "202605", "--dry-run"],
+    );
+    assert!(dry.status.success());
+    assert_eq!(json(&dry.stdout)["sid_ref"], "seaa2");
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 899);
+
+    let created = run(tmp.path(), &args);
+    assert!(created.status.success());
+    assert_eq!(json(&created.stdout)["sid_ref"], "seaa2");
+    assert!(root.join("202605_seaa2_may-task").is_dir());
+    let resolved = run(tmp.path(), &["resolve", "seaa2"]);
+    assert!(resolved.status.success());
+    assert_eq!(
+        json(&resolved.stdout)["folder"]["id"],
+        "202605_seaa2_may-task"
+    );
+    let after = run(tmp.path(), &["lint"]);
+    assert!(after.status.success());
+    assert_eq!(json(&after.stdout)["healthy"], true);
+}
+
+#[test]
 fn allocation_uses_default_replacement_and_empty_deny_prefix_policies() {
     let default = tempfile::tempdir().unwrap();
     create_folder(&default.path().join("stm"), "202605_sew2a_existing");

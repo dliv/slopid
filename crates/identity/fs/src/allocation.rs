@@ -95,9 +95,9 @@ mod tests {
 
         let snapshot = scan_root(&root).unwrap();
 
-        assert!(snapshot.is_occupied("202605", "sa2a2"));
-        assert!(snapshot.is_occupied("202605", "sa3a2"));
-        assert!(!snapshot.is_occupied("202605", "sa4a2"));
+        assert!(snapshot.is_occupied("sa2a2"));
+        assert!(snapshot.is_occupied("sa3a2"));
+        assert!(!snapshot.is_occupied("sa4a2"));
         assert_eq!(snapshot.next_seq("202605").unwrap(), 2);
     }
 
@@ -123,7 +123,7 @@ mod tests {
 
         let snapshot = scan_root(&root).unwrap();
 
-        assert!(!snapshot.is_occupied("202605", "sa2a2"));
+        assert!(!snapshot.is_occupied("sa2a2"));
         assert_eq!(
             snapshot.next_seq("202605").unwrap(),
             refcode::deterministic_seq_start("202605").unwrap()
@@ -139,7 +139,7 @@ mod tests {
 
         let snapshot = scan_root(&root).unwrap();
 
-        assert!(!snapshot.is_occupied("202605", "notaref"));
+        assert!(!snapshot.is_occupied("notaref"));
         assert_eq!(
             snapshot.next_seq("202605").unwrap(),
             refcode::deterministic_seq_start("202605").unwrap()
@@ -158,7 +158,7 @@ mod tests {
 
         let snapshot = scan_root(&root).unwrap();
 
-        assert!(snapshot.is_occupied("202605", "sa2a2"));
+        assert!(snapshot.is_occupied("sa2a2"));
         assert_eq!(snapshot.next_seq("202605").unwrap(), 1);
     }
 
@@ -176,8 +176,8 @@ mod tests {
 
         let snapshot = scan_root(&root).unwrap();
 
-        assert!(snapshot.is_occupied("202605", "sa2a2"));
-        assert!(snapshot.is_occupied("202605", "sa3a2"));
+        assert!(snapshot.is_occupied("sa2a2"));
+        assert!(snapshot.is_occupied("sa3a2"));
         assert_eq!(snapshot.next_seq("202605").unwrap(), 2);
     }
 
@@ -195,12 +195,12 @@ mod tests {
 
         let snapshot = scan_root(&root).unwrap();
 
-        assert!(snapshot.is_occupied("202605", "sa222"));
+        assert!(snapshot.is_occupied("sa222"));
         assert_eq!(snapshot.next_seq("202605").unwrap(), 1);
     }
 
     #[test]
-    fn scan_root_partitions_refs_and_max_sequence_by_period() {
+    fn scan_root_reserves_cross_month_refs_without_advancing_the_monthly_sequence() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("stm");
         fs::create_dir(&root).unwrap();
@@ -214,7 +214,7 @@ mod tests {
             "202605".to_string(),
             &snapshot,
             &prude_policy(),
-            [tail('a', '2')],
+            [tail('a', '2'), tail('b', '2')],
         )
         .unwrap();
 
@@ -222,7 +222,8 @@ mod tests {
             refcode::decode_seq(&plan.candidates()[0].sid_ref).unwrap(),
             refcode::deterministic_seq_start("202605").unwrap()
         );
-        assert_eq!(plan.candidates()[0].sid_ref, "seaa2");
+        assert_eq!(plan.candidates().len(), 1);
+        assert_eq!(plan.candidates()[0].sid_ref, "seab2");
     }
 
     #[test]
