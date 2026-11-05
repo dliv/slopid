@@ -4,10 +4,10 @@
 folders. Slopid owns folder identity; a task-memory consumer such as Slopdeck
 owns documents, relationships, notes, seeds, and lifecycle state.
 
-> **Current source version: Sid 0.5.0.** This is a breaking, identity-only
-> release paired with Slopdeck 0.1.1-alpha.19. The previous v0.4.0 protocol used
-> table-based `.sid` config and the `tasks` list key; the two protocols are
-> incompatible. Migrate callers and config, then adopt the matching pair.
+> **Current source version: Sid 0.5.1.** This patch reserves short refs across
+> all periods and keeps the identity-only protocol introduced in v0.5.0.
+> The older v0.4.0 protocol used table-based `.sid` config and the `tasks`
+> list key. Migrate callers and config before switching protocols.
 
 ## Install
 
@@ -17,9 +17,9 @@ brew install sid
 ```
 
 Or download a binary from [GitHub Releases](https://github.com/dliv/slopid/releases).
-The v0.5.0 release for these installation paths pairs Sid with Slopdeck
-0.1.1-alpha.19. Preserve the previous v0.4.0 installation until the workspace
-is ready to switch both products together.
+The v0.5.x identity protocol was introduced with Slopdeck 0.1.1-alpha.19.
+Preserve the previous v0.4.0 installation until the workspace is ready to
+switch both products together.
 
 ## Quick Start
 
